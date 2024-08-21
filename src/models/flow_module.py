@@ -1,0 +1,280 @@
+import os
+from typing import Any, List, Optional, Union
+
+import torch
+import torch.nn as nn
+
+from torchdiffeq import odeint
+from lightning import LightningModule
+
+from .components.optimal_transport import OTPlanSampler
+from utils.logging_utils import get_wandb_logger, plot_samples
+from .components.augmentation import (
+    AugmentationModule,
+    AugmentedVectorField,
+    Sequential,
+)
+from .components.solver import FlowSolver
+
+class YodaLitModule(LightningModule):
+    def __init__(
+        self,
+        net: Any,
+        optimizer: Any,
+        augmentations: AugmentationModule,
+        partial_solver: FlowSolver,
+        scheduler: Optional[Any] = None,
+        neural_ode: Optional[Any] = None,
+        ot_sampler: Optional[Union[str, Any]] = None,
+        sigma_min: float = 0.1,
+        avg_size: int = -1,
+        test_nfe: int = 100,
+        plot: bool = False,
+    ):
+        super(YodaLitModule, self).__init__()
+
+        self.save_hyperparameters(
+            ignore=[
+                "net",
+                "optimizer",
+                "scheduler",
+                "augmentations",
+                "partial_solver",
+            ],
+            logger=False,
+        )
+
+        self.dim = ()  # net.autoencoder.dim
+        self.net = net
+
+        # Freeze the weights of the autoencoder and flow_network
+        self.freeze_module(self.net.autoencoder)
+        self.freeze_module(self.net.flow_network)
+
+        self.augmentations = augmentations
+        self.aug_net = AugmentedVectorField(self.net, self.augmentations.regs, self.dim)
+        self.val_augmentations = AugmentationModule(
+            # cnf_estimator=None,
+            l1_reg=1,
+            l2_reg=1,
+            squared_l2_reg=1,
+        )
+        self.val_aug_net = AugmentedVectorField(
+            self.net, self.val_augmentations.regs, self.dim
+        )
+        if neural_ode is not None:
+            self.aug_node = Sequential(
+                self.augmentations.augmenter,
+                neural_ode(self.aug_net),
+            )
+
+        self.partial_solver = partial_solver
+        self.optimizer = optimizer
+        self.scheduler = scheduler
+        self.ot_sampler = ot_sampler
+        if ot_sampler == "None":
+            self.ot_sampler = None
+        if isinstance(self.ot_sampler, str):
+            # regularization taken for optimal Schrodinger bridge relationship
+            self.ot_sampler = OTPlanSampler(method=ot_sampler, reg=2 * sigma_min**2)
+        self.criterion = torch.nn.MSELoss()
+
+        self.eval_preds = []
+        self.eval_gts = []
+
+        # for averaging loss across batches
+        # self.train_loss = MeanMetric()
+        # self.val_loss = MeanMetric()
+        # self.test_loss = MeanMetric()
+
+    def forward(self, t: torch.Tensor, x: torch.Tensor, flows: torch.Tensor):
+        """Forward pass (t, x) -> dx/dt."""
+        return self.net(t, x, flows)
+
+    def freeze_module(self, module):
+        for param in module.parameters():
+            param.requires_grad = False
+
+    def calc_mu_sigma(self, x0, x1, t):
+        mu_t = t * x1 + (1 - t) * x0
+        sigma_t = self.hparams.sigma_min
+        return mu_t, sigma_t
+
+    def calc_u(self, x0, x1, x, t, mu_t, sigma_t):
+        del x, t, mu_t, sigma_t
+        return x1 - x0
+
+    def calc_loc_and_target(self, x0, x1, t, t_select):
+        """Computes the loss on a batch of data."""
+
+        t_xshape = t.reshape(-1, *([1] * (x0.dim() - 1)))
+        mu_t, sigma_t = self.calc_mu_sigma(x0, x1, t_xshape)
+        eps_t = torch.randn_like(mu_t)
+        x = mu_t + sigma_t * eps_t
+        ut = self.calc_u(x0, x1, x, t_xshape, mu_t, sigma_t)
+
+        # p is the pair-wise conditional probability matrix. Note that this has to be torch.cdist(x, mu) in that order
+        # t that network sees is incremented by first timepoint
+        t = t + t_select.reshape(-1, *t.shape[1:])
+        return x, ut, t, mu_t, sigma_t, eps_t
+
+    def preprocess_batch(self, X, flows=None, training: bool = False):
+        flows = self.net._get_flows(X, flows).unsqueeze(1)
+        t_select = torch.zeros(1, device=X.device)
+        latents = self.net.autoencoder._encode_observations(X)
+        x1 = latents[:, -1]
+        x0 = torch.randn_like(x1)
+        return latents[:, :-1], flows, x0, x1, t_select
+
+    def unpack_batch(self, batch):
+        num_frames = self.net.autoencoder.num_frames
+        if isinstance(batch, list) or isinstance(batch, tuple):
+            return (
+                batch[0][:, num_frames:],
+                batch[0][:, -num_frames:],
+                batch[1][:, num_frames:],
+            )
+        else:
+            return batch[:, :num_frames], batch[:, num_frames:], None
+
+    def step(self, batch: Any, training: bool = False):
+        """Computes the loss on a batch of data."""
+        # x0=noise, x1=target_frame, x=input_to_model[x:t,x0]
+        X, y, flows = self.unpack_batch(batch)
+
+        # get input_frames, noise, target_frame, t_select
+        X, flows, x0, x1, t_select = self.preprocess_batch(X, flows, training)
+        # Either randomly sample a single T or sample a batch of T's
+        if self.hparams.avg_size > 0:
+            t = torch.rand(1).repeat(X.shape[0]).type_as(X)
+        else:
+            t = torch.rand(X.shape[0]).type_as(X)
+        # Resample the plan if we are using optimal transport
+        if self.ot_sampler is not None:
+            x0, x1 = self.ot_sampler.sample_plan(x0, x1)
+
+        x, ut, t, mu_t, sigma_t, _ = self.calc_loc_and_target(x0, x1, t, t_select)
+
+        if self.hparams.avg_size > 0:
+            x, ut, t = self.average_ut(x, t, mu_t, sigma_t, ut)
+
+        x = torch.cat([X, x.unsqueeze(1)], dim=1)
+        aug_x = self.aug_net(t, x, flows, augmented_input=False)
+        reg, vt = self.augmentations(aug_x)
+
+        return torch.mean(reg), self.criterion(vt, ut)
+
+    def training_step(self, batch: Any, batch_idx: int):
+        reg, mse = self.step(batch, training=True)
+        loss = mse + reg
+        prefix = "train"
+        self.log_dict(
+            {f"{prefix}/loss": loss, f"{prefix}/mse": mse, f"{prefix}/reg": reg},
+            on_step=True,
+            on_epoch=False,
+            prog_bar=True,
+        )
+        return loss
+
+    def video_eval_step(self, batch: Any, batch_idx: int, prefix: str):
+        X, y, flows = self.unpack_batch(batch)
+        batch_size = X.shape[0]
+        sparse_flows = self.net.calculate_sparse_flows(
+            X[: min(4, batch_size), -2:],
+            flows[: min(4, batch_size), :1] if flows is not None else None,
+        )
+
+        frames = self.net.generate_frames(
+            latents=X[: min(4, batch_size), ...],  # 5],
+            sparse_flow_states=sparse_flows,
+            num_actions=1,
+            num_frames=self.config["frames_to_generate"],
+            steps=self.hparams.test_nfe,
+            verbose=self.is_main_process,
+        )
+
+        # save frames(only generated and gt)/videos to distinct folders,
+        #   save(frames[:, num_frames-1:], prefix="gen")
+        #   save(y, prefix="gt")
+        self.eval_preds.append(
+            frames
+        )  # val_writer.add_frames(frames, prefix, batch_idx)
+        self.val_gts.append(y)  # val_writer.add_frames(y, "gt", batch_idx)
+        return {"x": batch[0]}
+
+    def eval_step(self, batch: Any, batch_idx: int, prefix: str):
+        #if prefix == "test":
+        self.video_eval_step(batch, batch_idx, prefix)
+        shapes = [b.shape[0] for b in batch]
+
+        if (
+            False
+        ):  # not self.is_image and prefix == "val" and shapes.count(shapes[0]) == len(shapes):
+            reg, mse = self.step(batch, training=False)
+            loss = mse + reg
+            self.log_dict(
+                {f"{prefix}/loss": loss, f"{prefix}/mse": mse, f"{prefix}/reg": reg},
+                on_step=False,
+                on_epoch=True,
+                sync_dist=True,
+            )
+            return {"loss": loss, "mse": mse, "reg": reg, "x": self.unpack_batch(batch)}
+
+        return {"x": batch}
+
+    def validation_step(self, batch: Any, batch_idx: int):
+        return self.eval_step(batch, batch_idx, "val")
+
+    def eval_epoch_end(self, outputs: List[Any], prefix: str):
+        # calculate FID between generated and real images from above
+        wandb_logger = get_wandb_logger(self.loggers)
+        if prefix == "test":
+            os.makedirs("images", exist_ok=True)
+            if len(os.listdir("images")) > 0:
+                path = "/home/mila/a/alexander.tong/scratch/trajectory-inference/data/fid_stats_cifar10_train.npz"
+                from pytorch_fid import fid_score
+
+                fid = fid_score.calculate_fid_given_paths(
+                    ["images", path], 256, "cuda", 2048, 0
+                )
+                self.log(f"{prefix}/fid", fid)
+
+        # ts, x, x0, x_rest = self.preprocess_epoch_end(outputs, prefix)
+        # trajs, full_trajs = self.forward_eval_integrate(ts, x0, x_rest, outputs, prefix)
+        # plot samples like in yoda
+        if prefix == "val":
+            preds, gt = self.eval_preds, self.eval_gts
+        else:
+            preds, gt = self.test_videos, self.test_gts
+
+        if self.hparams.plot:
+            for pred, gt in zip(preds, gt):
+                plot_samples(
+                    pred,
+                    gt,
+                    title=f"{self.current_epoch}_samples",
+                    wandb_logger=wandb_logger,
+                )
+
+    def test_step(self, batch: Any, batch_idx: int):
+        return self.eval_step(batch, batch_idx, "test")
+
+    def on_validation_epoch_end(self):
+        outputs = self.eval_preds
+        self.eval_epoch_end(outputs, "val")
+
+    def on_test_epoch_end(self, outputs: List[Any]):
+        outputs = self.test_outputs
+        self.eval_epoch_end(outputs, "test")
+
+    def configure_optimizers(self):
+        """Pass model parameters to optimizer."""
+        optimizer = self.optimizer(params=self.parameters())
+        if self.scheduler is None:
+            return optimizer
+
+        scheduler = self.scheduler(optimizer)
+        return [optimizer], [{"scheduler": scheduler, "interval": "epoch"}]
+
+    def lr_scheduler_step(self, scheduler, optimizer_idx, metric):
+        scheduler.step(epoch=self.current_epoch)

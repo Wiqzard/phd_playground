@@ -1,0 +1,15 @@
+_target_: src.data.yoda.video_dataset.VideoDataModule
+data_path: ${paths.data_dir}
+input_size: 256 
+crop_size: 256
+frames_per_sample: 25 
+skip_frames: 2 
+random_time: True
+random_horizontal_flip: False
+random_time_reverse: False
+aug: False 
+albumentations: True 
+with_flows: False
+batch_size: 1 
+num_workers: 15
+pin_memory: False

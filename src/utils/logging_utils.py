@@ -1,5 +1,9 @@
 from typing import Any, Dict
+import os
 
+import PIL
+from torchvision.io import write_video
+from pytorch_lightning.loggers import WandbLogger
 from lightning_utilities.core.rank_zero import rank_zero_only
 from omegaconf import OmegaConf
 
@@ -55,3 +59,29 @@ def log_hyperparameters(object_dict: Dict[str, Any]) -> None:
     # send hparams to all loggers
     for logger in trainer.loggers:
         logger.log_hyperparams(hparams)
+    
+
+
+def get_wandb_logger(loggers):
+    """Gets the wandb logger if it is the list of loggers otherwise returns None."""
+    wandb_logger = None
+    for logger in loggers:
+        if isinstance(logger, WandbLogger):
+            wandb_logger = logger
+    return wandb_logger
+
+def plot_samples(preds, gts, title="samples", wandb_logger=None):
+    os.makedirs("samples", exist_ok=True)
+    
+    write_video(f"samples/preds_{title}.mp4", preds, fps=7) 
+    write_video(f"samples/gts_{title}.mp4", gts, fps=7)
+ 
+    if wandb_logger:
+        try:
+            wandb_logger.log(key=f"preds_{title}", media=f"samples/preds_{title}.mp4")
+            wandb_logger.log(key=f"gts_{title}", media=f"samples/gts_{title}.mp4")
+
+        except PIL.UnidentifiedImageError:
+            print(f"ERROR logging {title}")
+
+

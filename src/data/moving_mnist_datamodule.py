@@ -1,10 +1,9 @@
-
 from typing import Any, Dict, Optional, Tuple
 
 import torch
 from lightning import LightningDataModule
 from torch.utils.data import ConcatDataset, DataLoader, Dataset, random_split
-from torchvision.datasets import MovingMNIST 
+from torchvision.datasets import MovingMNIST
 from torchvision.transforms import transforms
 
 
@@ -33,7 +32,10 @@ class MovingMNISTDataModule(LightningDataModule):
 
         # data transformations
         self.transforms = transforms.Compose(
-            [transforms.ConvertImageDtype(torch.float), transforms.Normalize((0.1307,), (0.3081,))]
+            [
+                transforms.ConvertImageDtype(torch.float),
+                transforms.Normalize((0.1307,), (0.3081,)),
+            ]
         )
 
         self.data_train: Optional[Dataset] = None
@@ -59,7 +61,7 @@ class MovingMNISTDataModule(LightningDataModule):
         Do not use it to assign state (self.x = y).
         """
         MovingMNIST(self.hparams.data_dir, split=None, download=True)
-        #MovingMNIST(self.hparams.data_dir, split="test", download=True)
+        # MovingMNIST(self.hparams.data_dir, split="test", download=True)
 
     def setup(self, stage: Optional[str] = None) -> None:
         """Load data. Set variables: `self.data_train`, `self.data_val`, `self.data_test`.
@@ -77,11 +79,15 @@ class MovingMNISTDataModule(LightningDataModule):
                 raise RuntimeError(
                     f"Batch size ({self.hparams.batch_size}) is not divisible by the number of devices ({self.trainer.world_size})."
                 )
-            self.batch_size_per_device = self.hparams.batch_size // self.trainer.world_size
+            self.batch_size_per_device = (
+                self.hparams.batch_size // self.trainer.world_size
+            )
 
         # load and split datasets only if not loaded already
         if not self.data_train and not self.data_val and not self.data_test:
-            dataset = MovingMNIST(self.hparams.data_dir, split=None, transform=self.transforms)
+            dataset = MovingMNIST(
+                self.hparams.data_dir, split=None, transform=self.transforms
+            )
             self.data_train, self.data_val, self.data_test = random_split(
                 dataset=dataset,
                 lengths=self.hparams.train_val_test_split,
@@ -154,6 +160,3 @@ class MovingMNISTDataModule(LightningDataModule):
 
 if __name__ == "__main__":
     _ = MovingMNISTDataModule()
-
-
-

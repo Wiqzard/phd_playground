@@ -5,7 +5,6 @@ from lightning import LightningModule
 from torchmetrics import MaxMetric, MeanMetric
 
 
-
 class VideoMNISTLitModule(LightningModule):
     def __init__(
         self,
@@ -62,11 +61,11 @@ class VideoMNISTLitModule(LightningModule):
         # self.val_acc.reset()
         self.val_acc_best.reset()
 
-    def preprocess_batch(self, batch: torch.Tensor, training=False) -> Tuple[torch.Tensor, torch.Tensor]:
+    def preprocess_batch(
+        self, batch: torch.Tensor, training=False
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Returns input and target tensor."""
-        return torch.split(
-            batch, [self.T, batch.size(1) - self.T], dim=1
-        ) 
+        return torch.split(batch, [self.T, batch.size(1) - self.T], dim=1)
 
     def model_step(
         self, batch: torch.Tensor
@@ -85,9 +84,7 @@ class VideoMNISTLitModule(LightningModule):
         loss = self.criterion(preds, y)
         return loss, preds, y
 
-    def training_step(
-        self, batch: torch.Tensor, batch_idx: int
-    ) -> torch.Tensor:
+    def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
         """Perform a single training step on a batch of data from the training set.
 
         :param batch: A batch of data (a tuple) containing the input tensor of images and target
@@ -97,14 +94,18 @@ class VideoMNISTLitModule(LightningModule):
         """
         loss, preds, targets = self.model_step(batch)
         self.train_loss(loss)
-        self.log("train/loss", self.train_loss, on_step=False, on_epoch=True, prog_bar=True)
+        self.log(
+            "train/loss", self.train_loss, on_step=False, on_epoch=True, prog_bar=True
+        )
         return loss
 
     def on_train_epoch_end(self) -> None:
         "Lightning hook that is called when a training epoch ends."
         pass
 
-    def validation_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
+    def validation_step(
+        self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int
+    ) -> None:
         """Perform a single validation step on a batch of data from the validation set.
 
         :param batch: A batch of data (a tuple) containing the input tensor of images and target
@@ -115,19 +116,21 @@ class VideoMNISTLitModule(LightningModule):
 
         # update and log metrics
         self.val_loss(loss)
-        #self.val_acc(preds, targets)
+        # self.val_acc(preds, targets)
         self.log("val/loss", self.val_loss, on_step=False, on_epoch=True, prog_bar=True)
-        #self.log("val/acc", self.val_acc, on_step=False, on_epoch=True, prog_bar=True)
+        # self.log("val/acc", self.val_acc, on_step=False, on_epoch=True, prog_bar=True)
 
     def on_validation_epoch_end(self) -> None:
         "Lightning hook that is called when a validation epoch ends."
-        #acc = self.val_acc.compute()  # get current val acc
-        #self.val_acc_best(acc)  # update best so far val acc
+        # acc = self.val_acc.compute()  # get current val acc
+        # self.val_acc_best(acc)  # update best so far val acc
         # log `val_acc_best` as a value through `.compute()` method, instead of as a metric object
         # otherwise metric would be reset by lightning after each epoch
-        #self.log("val/acc_best", self.val_acc_best.compute(), sync_dist=True, prog_bar=True)
+        # self.log("val/acc_best", self.val_acc_best.compute(), sync_dist=True, prog_bar=True)
 
-    def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
+    def test_step(
+        self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int
+    ) -> None:
         """Perform a single test step on a batch of data from the test set.
 
         :param batch: A batch of data (a tuple) containing the input tensor of images and target
@@ -138,9 +141,11 @@ class VideoMNISTLitModule(LightningModule):
 
         # update and log metrics
         self.test_loss(loss)
-        #self.test_acc(preds, targets)
-        self.log("test/loss", self.test_loss, on_step=False, on_epoch=True, prog_bar=True)
-        #self.log("test/acc", self.test_acc, on_step=False, on_epoch=True, prog_bar=True)
+        # self.test_acc(preds, targets)
+        self.log(
+            "test/loss", self.test_loss, on_step=False, on_epoch=True, prog_bar=True
+        )
+        # self.log("test/acc", self.test_acc, on_step=False, on_epoch=True, prog_bar=True)
 
     def on_test_epoch_end(self) -> None:
         """Lightning hook that is called when a test epoch ends."""
