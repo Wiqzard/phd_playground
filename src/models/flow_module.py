@@ -52,8 +52,9 @@ class YodaLitModule(LightningModule):
         self.net = net
 
         # Freeze the weights of the autoencoder and flow_network
-        self.freeze_module(self.net.autoencoder)
-        self.freeze_module(self.net.flow_network)
+        # self.freeze_module(self.net.autoencoder)
+        # self.freeze_module(self.net.flow_network)
+        # self.freeze_module(self.net.flow_representation_network)
 
         self.augmentations = augmentations
         self.aug_net = AugmentedVectorField(self.net, self.augmentations.regs, self.dim)

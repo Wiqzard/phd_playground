@@ -1,5 +1,5 @@
-from typing import Any, Dict, Optional, Tuple
 import random
+from typing import Any, Dict, Optional, Tuple
 
 import albumentations as alb
 import h5py
@@ -112,8 +112,8 @@ class VideoDataset(Dataset):
         # Read h5 files as dataset
         self.videos_ds = HDF5Dataset(self.data_path)
 
-        print(f"Dataset length: {self.total_videos}")
-        print(f"Number of steps: {self.num_steps}")
+        # print(f"Dataset length: {self.total_videos}")
+        # print(f"Number of steps: {self.num_steps}")
 
     def __len__(self):
         return self.num_steps
@@ -126,9 +126,11 @@ class VideoDataset(Dataset):
         return len(self.videos_ds)
 
     def __getitem__(self, index, time_idx=0):
-        video_index = round((index % self.num_videos) / (self.num_videos - 1) * (self.max_index() - 1))
-        #video_index = round(index / (self.num_videos - 1) * (self.max_index() - 1))
-        #shard_idx, idx_in_shard = self.videos_ds.get_indices(video_index)
+        video_index = round(
+            (index % self.num_videos) / (self.num_videos - 1) * (self.max_index() - 1)
+        )
+        # video_index = round(index / (self.num_videos - 1) * (self.max_index() - 1))
+        # shard_idx, idx_in_shard = self.videos_ds.get_indices(video_index)
         shard_idx, idx_in_shard = self.videos_ds.get_indices(video_index)
 
         # Setup augmentations
@@ -144,7 +146,6 @@ class VideoDataset(Dataset):
                 time_idx = np.random.choice(video_len - num_frames)
             assert time_idx < video_len, "Time index out of video boundary"
 
-            
             for i in range(time_idx, min(time_idx + num_frames, video_len), self.skip_frames + 1):
                 if "videos" in f:
                     img = f["videos"][str(idx_in_shard)][str(i)][()]

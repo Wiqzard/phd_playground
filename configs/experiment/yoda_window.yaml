@@ -29,6 +29,8 @@ callbacks:
     auto_insert_metric_name: False
     dirpath: ${paths.output_dir}/checkpoints
     filename: "epoch_{epoch:03d}"
+  model_summary:
+    max_depth: 0
 
 model:
   num_val_frames: 15
@@ -43,9 +45,11 @@ model:
 
 trainer:
   devices: 4
+  strategy: ddp_find_unused_parameters_true
   #sync_batchnorm: False
   #limit_train_batches: 2
   limit_val_batches: 2
+  num_sanity_val_steps: 0
 #  min_epochs: 10
 #  max_epochs: 10
 

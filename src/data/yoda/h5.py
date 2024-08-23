@@ -11,7 +11,7 @@ from torch.utils.data import Dataset
 class HDF5Dataset(Dataset):
     @staticmethod
     def _get_num_in_shard(shard_p):
-        print(f"\rh5: Opening {shard_p}... ", end="")
+        # print(f"\rh5: Opening {shard_p}... ", end="")
         try:
             with h5py.File(shard_p, "r") as f:
                 num_per_shard = len(f["len"].keys())
@@ -32,7 +32,7 @@ class HDF5Dataset(Dataset):
             num_per_shard = number of entries in all of the shards in `ps`
         """
         shard_lengths = []
-        print("Checking shard_lengths in", file_paths)
+        # print("Checking shard_lengths in", file_paths)
         for i, p in enumerate(file_paths):
             shard_lengths.append(HDF5Dataset._get_num_in_shard(p))
         return shard_lengths
@@ -79,14 +79,14 @@ class HDF5Dataset(Dataset):
 
         self.num_of_shards = len(self.shard_paths)
 
-        print(
-            "h5: paths",
-            len(self.shard_paths),
-            "; shard_lengths",
-            self.shard_lengths,
-            "; total",
-            self.total_num,
-        )
+        # print(
+        #    "h5: paths",
+        #    len(self.shard_paths),
+        #    "; shard_lengths",
+        #    self.shard_lengths,
+        #    "; total",
+        #    self.total_num,
+        # )
 
         # Shuffle shards
         if self.shuffle_shards:
@@ -144,7 +144,7 @@ class HDF5Maker:
             if os.path.isfile(self.out_path):
                 if not self.force:
                     raise ValueError(f"{self.out_path} already exists.")
-                print(f"Removing {self.out_path}...")
+                # print(f"Removing {self.out_path}...")
                 os.remove(self.out_path)
             # Make the directory if it does not exist
             self.out_dir = os.path.dirname(self.out_path)
@@ -159,7 +159,7 @@ class HDF5Maker:
                 # Check if it should be deleted
                 if not self.force:
                     raise ValueError(f"{self.out_dir} already exists.")
-                print(f"Removing *.hdf5 files from {self.out_dir}...")
+                # print(f"Removing *.hdf5 files from {self.out_dir}...")
                 files = glob.glob(os.path.join(self.out_dir, "*.hdf5"))
                 files += glob.glob(os.path.join(self.out_dir, "*.h5"))
                 for file in files:
@@ -186,7 +186,7 @@ class HDF5Maker:
         self.shard_number += 1
 
         if self.max_shards is not None and self.shard_number == self.max_shards + 1:
-            print(f"Created {self.max_shards} shards, ENDING.")
+            # print(f"Created {self.max_shards} shards, ENDING.")
             return
 
         self.shard_p = os.path.join(
@@ -196,7 +196,7 @@ class HDF5Maker:
         assert not os.path.exists(self.shard_p), f"Record already exists! {self.shard_p}"
         self.shard_paths.append(self.shard_p)
 
-        print(f"Creating shard # {self.shard_number}: {self.shard_p}...")
+        # print(f"Creating shard # {self.shard_number}: {self.shard_p}...")
         self.writer = h5py.File(self.shard_p, "w")
         if self.video:
             self.create_video_groups()
