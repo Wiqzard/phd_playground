@@ -70,11 +70,13 @@ def get_wandb_logger(loggers):
             wandb_logger = logger
     return wandb_logger
 
-def plot_samples(preds, gts, title="samples", wandb_logger=None):
-    os.makedirs("samples", exist_ok=True)
+def plot_samples(preds, gts, title="samples", path="./", wandb_logger=None):
+    path = os.path.join(path, "samples")
+    os.makedirs(path, exist_ok=True)
     
-    write_video(f"samples/preds_{title}.mp4", preds, fps=7) 
-    write_video(f"samples/gts_{title}.mp4", gts, fps=7)
+    for i in range(len(preds)):
+        write_video(os.path.join(path, f"pred_{title}_{i}.mp4"), preds[i].squeeze(0), fps=7) 
+        write_video(os.path.join(path, f"gt_{title}_{i}.mp4"), gts[i].squeeze(0), fps=7)
  
     if wandb_logger:
         try:

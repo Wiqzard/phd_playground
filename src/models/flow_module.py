@@ -7,6 +7,7 @@ import torch.nn as nn
 from torchdiffeq import odeint
 from lightning import LightningModule
 
+from .components.helpers import to_video
 from .components.optimal_transport import OTPlanSampler
 from utils.logging_utils import get_wandb_logger, plot_samples
 from .components.augmentation import (
@@ -27,8 +28,10 @@ class YodaLitModule(LightningModule):
         neural_ode: Optional[Any] = None,
         ot_sampler: Optional[Union[str, Any]] = None,
         sigma_min: float = 0.1,
+        num_val_frames: int = 10,
         avg_size: int = -1,
         test_nfe: int = 100,
+        path: str = "./",
         plot: bool = False,
     ):
         super(YodaLitModule, self).__init__()
@@ -119,15 +122,22 @@ class YodaLitModule(LightningModule):
         return x, ut, t, mu_t, sigma_t, eps_t
 
     def preprocess_batch(self, X, flows=None, training: bool = False):
-        flows = self.net._get_flows(X, flows).unsqueeze(1)
+        flows = self.net._get_flows(X, flows).unsqueeze(1) # gets flow from -2 to -1 frame
+
         t_select = torch.zeros(1, device=X.device)
-        latents = self.net.autoencoder._encode_observations(X)
+
+        # sample conditioning and reference frames from behind, encode them, return latents and time_ids
+        with torch.no_grad():
+            latents, time_ids = self.net.get_input_frames(X, training) 
+
+        context = [time_ids, flows] 
+
         x1 = latents[:, -1]
         x0 = torch.randn_like(x1)
-        return latents[:, :-1], flows, x0, x1, t_select
+        return latents[:, :-1], context, x0, x1, t_select
 
     def unpack_batch(self, batch):
-        num_frames = self.net.autoencoder.num_frames
+        num_frames = self.net.vector_field_regressor.num_frames_in_block[0]
         if isinstance(batch, list) or isinstance(batch, tuple):
             return (
                 batch[0][:, num_frames:],
@@ -135,15 +145,15 @@ class YodaLitModule(LightningModule):
                 batch[1][:, num_frames:],
             )
         else:
-            return batch[:, :num_frames], batch[:, num_frames:], None
+            return batch, None #batch[:, :num_frames], batch[:, num_frames:], None
 
     def step(self, batch: Any, training: bool = False):
         """Computes the loss on a batch of data."""
         # x0=noise, x1=target_frame, x=input_to_model[x:t,x0]
-        X, y, flows = self.unpack_batch(batch)
+        X, context = self.unpack_batch(batch)
 
         # get input_frames, noise, target_frame, t_select
-        X, flows, x0, x1, t_select = self.preprocess_batch(X, flows, training)
+        X, context, x0, x1, t_select = self.preprocess_batch(X, context, training)
         # Either randomly sample a single T or sample a batch of T's
         if self.hparams.avg_size > 0:
             t = torch.rand(1).repeat(X.shape[0]).type_as(X)
@@ -159,7 +169,7 @@ class YodaLitModule(LightningModule):
             x, ut, t = self.average_ut(x, t, mu_t, sigma_t, ut)
 
         x = torch.cat([X, x.unsqueeze(1)], dim=1)
-        aug_x = self.aug_net(t, x, flows, augmented_input=False)
+        aug_x = self.aug_net(t, x, context, augmented_input=False)
         reg, vt = self.augmentations(aug_x)
 
         return torch.mean(reg), self.criterion(vt, ut)
@@ -177,30 +187,34 @@ class YodaLitModule(LightningModule):
         return loss
 
     def video_eval_step(self, batch: Any, batch_idx: int, prefix: str):
-        X, y, flows = self.unpack_batch(batch)
-        batch_size = X.shape[0]
-        sparse_flows = self.net.calculate_sparse_flows(
-            X[: min(4, batch_size), -2:],
-            flows[: min(4, batch_size), :1] if flows is not None else None,
-        )
+        X, flows  = self.unpack_batch(batch)
+        X, y = X[:, :-self.hparams.num_val_frames], X[:, -self.hparams.num_val_frames:]
 
-        frames = self.net.generate_frames(
-            latents=X[: min(4, batch_size), ...],  # 5],
-            sparse_flow_states=sparse_flows,
-            num_actions=1,
-            num_frames=self.config["frames_to_generate"],
-            steps=self.hparams.test_nfe,
-            verbose=self.is_main_process,
-        )
+        flows = self.net._get_flows(X, flows).unsqueeze(1) # gets flow from -2 to -1 frame
+        #latents, time_ids  = self.net.get_input_frames(X, training=False)
 
+
+        with torch.no_grad():
+            frames = self.net.generate_frames(
+                observations=X[: min(4, X.shape[0]), ...],  
+                context=flows,
+                num_frames=self.hparams.num_val_frames,
+                steps=self.hparams.test_nfe,
+                # if main rank tTrue
+                verbose=False,
+            )
+
+        self.eval_preds.append(
+            to_video(frames).permute(0, 1, 3, 4, 2)
+        )  
+        gt = torch.cat([frames[:, :-self.hparams.num_val_frames], y], dim=1)
+        self.eval_gts.append(to_video(gt).permute(0, 1, 3, 4, 2)) 
         # save frames(only generated and gt)/videos to distinct folders,
         #   save(frames[:, num_frames-1:], prefix="gen")
         #   save(y, prefix="gt")
-        self.eval_preds.append(
-            frames
-        )  # val_writer.add_frames(frames, prefix, batch_idx)
-        self.val_gts.append(y)  # val_writer.add_frames(y, "gt", batch_idx)
+        # val_writer.add_frames(frames, prefix, batch_idx)
         return {"x": batch[0]}
+
 
     def eval_step(self, batch: Any, batch_idx: int, prefix: str):
         #if prefix == "test":
@@ -231,7 +245,7 @@ class YodaLitModule(LightningModule):
         if prefix == "test":
             os.makedirs("images", exist_ok=True)
             if len(os.listdir("images")) > 0:
-                path = "/home/mila/a/alexander.tong/scratch/trajectory-inference/data/fid_stats_cifar10_train.npz"
+                path = ""
                 from pytorch_fid import fid_score
 
                 fid = fid_score.calculate_fid_given_paths(
@@ -253,6 +267,7 @@ class YodaLitModule(LightningModule):
                     pred,
                     gt,
                     title=f"{self.current_epoch}_samples",
+                    path = self.hparams.path,
                     wandb_logger=wandb_logger,
                 )
 

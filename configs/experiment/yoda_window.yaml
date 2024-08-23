@@ -23,22 +23,35 @@ callbacks:
     monitor: "train/loss"
     patience: 100
     mode: "min"
+  model_checkpoint:
+    monitor: "train/loss"
+    mode: "min"
+    save_last: True
+    save_top_k: 1
+    auto_insert_metric_name: False
+    dirpath: ${paths.output_dir}/checkpoints
+    filename: "epoch_{epoch:03d}"
+
+model:
+  num_val_frames: 2
+  test_nfe: 2
+  plot: True
 
 
 trainer:
   devices: 1
-  limit_train_batches: 2
-  #limit_val_batches: 2
+  #limit_train_batches: 2
+  limit_val_batches: 2
 #  min_epochs: 10
 #  max_epochs: 10
 
 data:
-  batch_size: 2 
+  batch_size: 1 
   num_workers: 15
 #
-#logger:
-#  wandb:
-#    tags: ${tags}
-#    group: "test"
-#  aim:
-#    experiment: "test"
+logger:
+  wandb:
+    tags: ${tags}
+    group: "test"
+  aim:
+    experiment: "test"

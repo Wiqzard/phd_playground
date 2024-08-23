@@ -1,5 +1,11 @@
 _target_: src.models.flow_module.YodaLitModule
 
+num_val_frames: 15 
+sigma_min: 0.1
+test_nfe: 100
+plot: False
+path: ${paths.output_dir}
+
 optimizer:
   _target_: torch.optim.AdamW
   _partial_: true
@@ -11,13 +17,18 @@ net:
   sigma: 0.1
   skip_prob: 0.5
 
+
+  # maybe put this in data config
+  num_ref_frames: 5 # the last reference frames gets used for the vector field
+  num_cond_frames: 5
+  hist_window_size: 10  # sample conditioning frames window before reference frames
+
   autoencoder: 
     _target_: src.models.components.velocity_net.VideoAutoencoder
     type: svd
     hf_token: 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
     model_id: stabilityai/stable-video-diffusion-img2vid-xt-1-1
     ckpt_path:  # path to the checkpoint #need output z to be 3x16x16
-    num_frames: 10
 
   flow_network:
     _target_: src.models.components.yoda.flow_network.FlowNetwork
@@ -32,7 +43,10 @@ net:
   flow_representation_network:
     _target_: src.models.components.yoda.flow_representation_network.FlowRepresentationNetwork
     in_channels: 3 #${data.channels}
-    out_channels: 256
+    out_channels: 256 #${vector_field_regressor.cross_attention_dim} 
+    out_res: [8, 8] #32, 32] #${vector_field_regressor.sample_size}
+    tile_size: [32, 32] # image size / tile_size = out_res !
+    depth: 4
   
   vector_field_regressor:
     _target_: src.models.components.yoda.vector_field_regressor.VectorFieldRegressor
@@ -51,9 +65,9 @@ net:
             "CrossAttnUpBlockSpatioTemporal",
             "CrossAttnUpBlockSpatioTemporal",
         ]
-    block_out_channels: [32, 32, 64, 64] ##[64, 128, 256, 512]
+    block_out_channels: [32, 32, 32, 32] ##[64, 128, 256, 512]
     addition_time_embed_dim: 128
-    projection_class_embeddings_input_dim: 1280 
+    projection_class_embeddings_input_dim: 1280 # input_frames * added_time_embed_dim 
     layers_per_block:  2
     cross_attention_dim:  256 #128
     transformer_layers_per_block:  1
@@ -82,7 +96,12 @@ partial_solver:
 
 ot_sampler: null
 
-sigma_min: 0.1
+
+
+# write config check to make sure that the values here are correct for the dataset
+# also we want here other inputs like fps, etc. maybe pass the whole dataset
+
+
 
 # Set to integer if want to train with left out timepoint
 #leaveout_timepoint: -1

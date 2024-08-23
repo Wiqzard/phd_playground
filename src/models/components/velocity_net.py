@@ -1,6 +1,6 @@
 import sys
 import os
-from typing import Any, List
+from typing import Any, List, Tuple
 from functools import partial, wraps
 
 import torch
@@ -43,14 +43,12 @@ class VideoAutoencoder(nn.Module):
         ckpt_path: str,
         hf_token: str = None,
         model_id: str = None,
-        num_frames: int = 1,
     ):
         super(VideoAutoencoder, self).__init__()
         self.type = type
         self.ckpt_path = ckpt_path
         self.hf_token = hf_token
         self.model_id = model_id
-        self.num_frames = num_frames
 
         if type == "ours":
             raise NotImplementedError("Not implemented yet")
@@ -78,6 +76,7 @@ class VideoAutoencoder(nn.Module):
         latents = self._encode_observations(x)
         return latents, self._decode_latents(latents)
 
+    @torch.no_grad()
     def _encode_observations(self, x: torch.Tensor) -> torch.Tensor:
         if self.type == "ours":
             latents = self.ae(x).latents
@@ -91,9 +90,10 @@ class VideoAutoencoder(nn.Module):
             latents = rearrange(flat_latents, "(b n) c h w -> b n c h w", n=x.size(1))
         return latents
 
+    @manage_gpu_memory
     def _decode_latents(self, x: torch.Tensor) -> torch.Tensor:
         """Helper function to decode latents back to image space."""
-        b, num_frames = x.shape[:1]
+        b, num_frames = x.shape[:2]
         latents = rearrange(x, "b n c h w -> (b n) c h w")
         if self.type == "ours":
             reconstructed_observations = self.ae.backbone.decode_from_latents(latents)
@@ -120,6 +120,9 @@ class VelocityNet(nn.Module):
         vector_field_regressor: Any,
         sigma: float,
         skip_prob: float,
+        num_ref_frames: int = 5,
+        num_cond_frames: int = 5,
+        hist_window_size: int = 5,
     ):
         super(VelocityNet, self).__init__()
 
@@ -131,13 +134,11 @@ class VelocityNet(nn.Module):
 
         self.sigma = sigma
         self.skip_prob = skip_prob
+        self.num_ref_frames = num_ref_frames
+        self.num_cond_frames = num_cond_frames
+        self.hist_window_size = hist_window_size
 
-        # self.config = config
-        # self.sigma = config["sigma"]
-        # self.ae.eval()
-        # if False:
-        # ckpt_path = "runs/custom_run-europe_videos/checkpoints/final_step_300000.pth"
-        # self.load_from_ckpt(ckpt_path, except_keys=["ae"], fuzzy_match=True)
+        self.autoencoder.eval()
 
     def load_from_ckpt(
         self, ckpt_path: str, except_keys: List[str] = [], fuzzy_match: bool = False
@@ -185,7 +186,8 @@ class VelocityNet(nn.Module):
             else:
                 flows = flows[:, -1].unsqueeze(1)
         sparse_flows = self.sparsification_network(flows)[0]
-        flows = self.flow_representation_network(sparse_flows).unsqueeze(1)
+        flows = self.flow_representation_network(sparse_flows)
+        flows = flows.reshape(*flows.shape[:2], -1).permute(0, 2, 1)
         return flows
 
     @manage_gpu_memory
@@ -202,23 +204,26 @@ class VelocityNet(nn.Module):
         # Compute flows
         if flows is None:
             flows = self.flow_network(observations)
+            flows = flows.reshape(-1, 2, *flows.shape[-2:])
 
         # Sparsify flows
         sparsification_results = self.sparsification_network(
             flows, num_vectors=num_vectors
         )
-        sparse_flows = sparsification_results.sparse_output
+        sparse_flows = sparsification_results[0]
 
         return sparse_flows
 
-    def forward(self, t, input_latents: torch.Tensor, flow_states: torch.Tensor):
+    def forward(self, t, input_latents: torch.Tensor, context: torch.Tensor):
         batch_size, n_obs = input_latents.size(0), input_latents.size(1)
-        index_distances = (
-            torch.arange(n_obs, device=input_latents.device)
-            .flip(0)
-            .unsqueeze(0)
-            .repeat(batch_size, 1)
-        )
+        flow_states = context[1]
+        index_distances = context[0]
+        #index_distances = (
+        #    torch.arange(n_obs, device=input_latents.device)
+        #    .flip(0)
+        #    .unsqueeze(0)
+        #    .repeat(batch_size, 1)
+        #)
         # Predict vectors using the regressor
         reconstructed_vectors = self.vector_field_regressor(
             sample=input_latents,
@@ -229,16 +234,44 @@ class VelocityNet(nn.Module):
             < self.skip_prob,
         )
         return reconstructed_vectors
+    
+    def get_input_frames(self, X: torch.Tensor, training:bool=False) -> Tuple[torch.Tensor, torch.Tensor]:
+        # last frames
+        reference_frames = X[:, -self.num_ref_frames:]
+
+        # sample within the history window before reference frames
+        upper_bound = min(X.shape[1] - self.num_ref_frames, self.hist_window_size)
+
+        conditioning_frames_idx = torch.sort(
+            torch.randperm(upper_bound)[:self.num_cond_frames]
+        )[0].unsqueeze(0).repeat(X.shape[0], 1).flip(1)
+
+        conditioning_frames = X[:, :-self.num_ref_frames][
+            torch.arange(X.shape[0]).unsqueeze(1), -conditioning_frames_idx
+        ]
+
+        time_ids_conditioning =  self.num_ref_frames + conditioning_frames_idx
+        time_ids_reference = torch.arange(0, self.num_ref_frames).flip(0)
+
+        time_ids = torch.cat([time_ids_conditioning, time_ids_reference.unsqueeze(0).expand(X.shape[0], -1)], dim=1).to(X.device)
+                
+        frames = torch.cat([conditioning_frames, reference_frames], dim=1)
+
+        if training:
+            frames = self.autoencoder._encode_observations(frames)
+
+        return frames, time_ids
+
+
 
     @manage_gpu_memory
     def generate_frames(
         self,
         observations: torch.Tensor,
-        sparse_flows: torch.Tensor = None,
+        context: torch.Tensor = None,
         num_frames: int = None,
         steps: int = 100,
         warm_start: float = 0.0,
-        past_horizon: int = -1,
         skip_past: bool = False,
         verbose: bool = False,
     ) -> torch.Tensor:
@@ -257,25 +290,27 @@ class VelocityNet(nn.Module):
         """
 
         # Encode observations to latents
-        self.ae.eval()
+        observations = observations[:, -(self.num_cond_frames+self.num_ref_frames):]
         with torch.no_grad():
-            latents = self._encode_observations(observations)
+            latents = self.autoencoder._encode_observations(observations)
 
         b, n, c, h, w = latents.shape
         shape = [b, n, c, h, w]
+        sparse_flows = context
+        num_actions = sparse_flows.size(1) if sparse_flows is not None else 0
 
         # Encode sparse flows
-        if sparse_flows is not None:
-            sparse_flow_states = self.flow_representation_network(
-                sparse_flows
-            ).unsqueeze(1)
-            num_actions = sparse_flow_states.size(1)
-        else:
-            sparse_flow_states = torch.zeros(
-                [b, 1, self.vector_field_regressor.action_state_size, 16, 16],
-                device=device,
-            )
-            num_actions = 0
+        #if sparse_flows is not None:
+        #    sparse_flow_states = self.flow_representation_network(
+        #        sparse_flows
+        #    ).unsqueeze(1)
+        #    num_actions = sparse_flow_states.size(1)
+        #else:
+        #    sparse_flow_states = torch.zeros(
+        #        [b, 1, self.vector_field_regressor.action_state_size, 16, 16],
+        #        device=device,
+        #    )
+        #    num_actions = 0
 
         # Generate future latents
         gen = tqdm(
@@ -288,7 +323,7 @@ class VelocityNet(nn.Module):
         for i in gen:
             latents = self._generate_next_latent(
                 latents,
-                sparse_flow_states,
+                sparse_flows,
                 num_actions,
                 shape,
                 warm_start,
@@ -299,7 +334,7 @@ class VelocityNet(nn.Module):
         gen.close()
 
         # Decode to image space
-        reconstructed_observations = self._decode_latents(latents, b)
+        reconstructed_observations = self.autoencoder._decode_latents(latents)
 
         return reconstructed_observations
 
@@ -316,11 +351,13 @@ class VelocityNet(nn.Module):
         """Helper function to generate the next latent."""
 
         def f(t: torch.Tensor, y: torch.Tensor):
-            sample_latents = latents[:, -n + 1 :]
-            sample_latents = torch.cat([sample_latents, y.unsqueeze(1)], dim=1)
-            index_distances = (
-                torch.arange(0, n).flip(0).unsqueeze(0).repeat(b, 1).to(latents.device)
-            )
+            # here are all latents, e.g. 10 gt latents and 1 generated latent
+            # sample k conditional latents and cat with the reference latents - 1
+            # cat with the initial reference latent y
+            # calculate time_ids + flows
+
+            sample_latents, index_distances = self.get_input_frames(latents, training=False)
+            sample_latents = torch.cat([sample_latents[:, :-1], y.unsqueeze(1)], dim=1)
 
             # Calculate vectors
             vectors = self.vector_field_regressor(
