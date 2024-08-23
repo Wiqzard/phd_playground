@@ -1,11 +1,11 @@
-from typing import Any, Dict
 import os
+from typing import Any, Dict
 
 import PIL
-from torchvision.io import write_video
-from pytorch_lightning.loggers import WandbLogger
 from lightning_utilities.core.rank_zero import rank_zero_only
 from omegaconf import OmegaConf
+from pytorch_lightning.loggers import WandbLogger
+from torchvision.io import write_video
 
 from src.utils import pylogger
 
@@ -59,7 +59,6 @@ def log_hyperparameters(object_dict: Dict[str, Any]) -> None:
     # send hparams to all loggers
     for logger in trainer.loggers:
         logger.log_hyperparams(hparams)
-    
 
 
 def get_wandb_logger(loggers):
@@ -70,14 +69,15 @@ def get_wandb_logger(loggers):
             wandb_logger = logger
     return wandb_logger
 
+
 def plot_samples(preds, gts, title="samples", path="./", wandb_logger=None):
     path = os.path.join(path, "samples")
     os.makedirs(path, exist_ok=True)
-    
+
     for i in range(len(preds)):
-        write_video(os.path.join(path, f"pred_{title}_{i}.mp4"), preds[i].squeeze(0), fps=7) 
+        write_video(os.path.join(path, f"pred_{title}_{i}.mp4"), preds[i].squeeze(0), fps=7)
         write_video(os.path.join(path, f"gt_{title}_{i}.mp4"), gts[i].squeeze(0), fps=7)
- 
+
     if wandb_logger:
         try:
             wandb_logger.log(key=f"preds_{title}", media=f"samples/preds_{title}.mp4")
@@ -85,5 +85,3 @@ def plot_samples(preds, gts, title="samples", path="./", wandb_logger=None):
 
         except PIL.UnidentifiedImageError:
             print(f"ERROR logging {title}")
-
-

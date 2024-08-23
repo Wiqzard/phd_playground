@@ -2,12 +2,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
-from torchvision.models.optical_flow import raft_large, Raft_Large_Weights
+from torchvision.models.optical_flow import Raft_Large_Weights, raft_large
 
 
 class FlowNetwork(nn.Module):
     def __init__(self, scale: float = 4.0):
-        super(FlowNetwork, self).__init__()
+        super().__init__()
 
         self.scale = scale
 
@@ -52,8 +52,6 @@ class FlowNetwork(nn.Module):
         resized_flows = F.interpolate(
             list_of_large_flows[-1] / self.scale, size=[height, width], mode="nearest"
         )
-        folded_flows = rearrange(
-            resized_flows, "(b n) c h w -> b n c h w", n=num_observations - 1
-        )
+        folded_flows = rearrange(resized_flows, "(b n) c h w -> b n c h w", n=num_observations - 1)
 
         return folded_flows

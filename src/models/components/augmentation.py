@@ -109,9 +109,9 @@ def autograd_trace(x_out, x_in, **kwargs):
     """Standard brute-force means of obtaining trace of the Jacobian, O(d) calls to autograd."""
     trJ = 0.0
     for i in range(x_in.shape[1]):
-        trJ += torch.autograd.grad(
-            x_out[:, i].sum(), x_in, allow_unused=False, create_graph=True
-        )[0][:, i]
+        trJ += torch.autograd.grad(x_out[:, i].sum(), x_in, allow_unused=False, create_graph=True)[
+            0
+        ][:, i]
     return trJ
 
 
@@ -295,9 +295,7 @@ class AugmentedVectorField(nn.Module):
             dx = dx.reshape(dx.shape[0], -1)
             # x_out = x_out.squeeze(dim=1)
 
-            augs = [
-                aug_fn(t, x, dx, SharedContext) for aug_fn in self.augmentation_list
-            ]
+            augs = [aug_fn(t, x, dx, SharedContext) for aug_fn in self.augmentation_list]
             augs = torch.stack(augs, dim=1)
         # `+ 0*state` has the only purpose of connecting state[:, 0] to autograd graph
         return torch.cat([augs, dx], 1) + (0 * state if augmented_input else 0)
@@ -313,9 +311,7 @@ class Old_CNF(nn.Module):
     def __init__(self, net, trace_estimator=None, noise_dist=None):
         super().__init__()
         self.net = net
-        self.trace_estimator = (
-            trace_estimator if trace_estimator is not None else autograd_trace
-        )
+        self.trace_estimator = trace_estimator if trace_estimator is not None else autograd_trace
         self.noise_dist, self.noise = noise_dist, None
 
     def forward(self, t, x):

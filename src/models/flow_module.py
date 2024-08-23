@@ -3,19 +3,20 @@ from typing import Any, List, Optional, Union
 
 import torch
 import torch.nn as nn
-
-from torchdiffeq import odeint
 from lightning import LightningModule
+from torchdiffeq import odeint
 
-from .components.helpers import to_video
-from .components.optimal_transport import OTPlanSampler
 from utils.logging_utils import get_wandb_logger, plot_samples
+
 from .components.augmentation import (
     AugmentationModule,
     AugmentedVectorField,
     Sequential,
 )
+from .components.helpers import to_video
+from .components.optimal_transport import OTPlanSampler
 from .components.solver import FlowSolver
+
 
 class YodaLitModule(LightningModule):
     def __init__(
@@ -34,7 +35,7 @@ class YodaLitModule(LightningModule):
         path: str = "./",
         plot: bool = False,
     ):
-        super(YodaLitModule, self).__init__()
+        super().__init__()
 
         self.save_hyperparameters(
             ignore=[
@@ -62,9 +63,7 @@ class YodaLitModule(LightningModule):
             l2_reg=1,
             squared_l2_reg=1,
         )
-        self.val_aug_net = AugmentedVectorField(
-            self.net, self.val_augmentations.regs, self.dim
-        )
+        self.val_aug_net = AugmentedVectorField(self.net, self.val_augmentations.regs, self.dim)
         if neural_ode is not None:
             self.aug_node = Sequential(
                 self.augmentations.augmenter,
@@ -122,15 +121,15 @@ class YodaLitModule(LightningModule):
         return x, ut, t, mu_t, sigma_t, eps_t
 
     def preprocess_batch(self, X, flows=None, training: bool = False):
-        flows = self.net._get_flows(X, flows).unsqueeze(1) # gets flow from -2 to -1 frame
+        flows = self.net._get_flows(X, flows).unsqueeze(1)  # gets flow from -2 to -1 frame
 
         t_select = torch.zeros(1, device=X.device)
 
         # sample conditioning and reference frames from behind, encode them, return latents and time_ids
         with torch.no_grad():
-            latents, time_ids = self.net.get_input_frames(X, training) 
+            latents, time_ids = self.net.get_input_frames(X, training)
 
-        context = [time_ids, flows] 
+        context = [time_ids, flows]
 
         x1 = latents[:, -1]
         x0 = torch.randn_like(x1)
@@ -145,7 +144,7 @@ class YodaLitModule(LightningModule):
                 batch[1][:, num_frames:],
             )
         else:
-            return batch, None #batch[:, :num_frames], batch[:, num_frames:], None
+            return batch, None  # batch[:, :num_frames], batch[:, num_frames:], None
 
     def step(self, batch: Any, training: bool = False):
         """Computes the loss on a batch of data."""
@@ -187,16 +186,15 @@ class YodaLitModule(LightningModule):
         return loss
 
     def video_eval_step(self, batch: Any, batch_idx: int, prefix: str):
-        X, flows  = self.unpack_batch(batch)
-        X, y = X[:, :-self.hparams.num_val_frames], X[:, -self.hparams.num_val_frames:]
+        X, flows = self.unpack_batch(batch)
+        X, y = X[:, : -self.hparams.num_val_frames], X[:, -self.hparams.num_val_frames :]
 
-        flows = self.net._get_flows(X, flows).unsqueeze(1) # gets flow from -2 to -1 frame
-        #latents, time_ids  = self.net.get_input_frames(X, training=False)
-
+        flows = self.net._get_flows(X, flows).unsqueeze(1)  # gets flow from -2 to -1 frame
+        # latents, time_ids  = self.net.get_input_frames(X, training=False)
 
         with torch.no_grad():
             frames = self.net.generate_frames(
-                observations=X[: min(4, X.shape[0]), ...],  
+                observations=X[: min(4, X.shape[0]), ...],
                 context=flows,
                 num_frames=self.hparams.num_val_frames,
                 steps=self.hparams.test_nfe,
@@ -204,20 +202,17 @@ class YodaLitModule(LightningModule):
                 verbose=False,
             )
 
-        self.eval_preds.append(
-            to_video(frames).permute(0, 1, 3, 4, 2)
-        )  
-        gt = torch.cat([frames[:, :-self.hparams.num_val_frames], y], dim=1)
-        self.eval_gts.append(to_video(gt).permute(0, 1, 3, 4, 2)) 
+        self.eval_preds.append(to_video(frames).permute(0, 1, 3, 4, 2))
+        gt = torch.cat([frames[:, : -self.hparams.num_val_frames], y], dim=1)
+        self.eval_gts.append(to_video(gt).permute(0, 1, 3, 4, 2))
         # save frames(only generated and gt)/videos to distinct folders,
         #   save(frames[:, num_frames-1:], prefix="gen")
         #   save(y, prefix="gt")
         # val_writer.add_frames(frames, prefix, batch_idx)
         return {"x": batch[0]}
 
-
     def eval_step(self, batch: Any, batch_idx: int, prefix: str):
-        #if prefix == "test":
+        # if prefix == "test":
         self.video_eval_step(batch, batch_idx, prefix)
         shapes = [b.shape[0] for b in batch]
 
@@ -248,9 +243,7 @@ class YodaLitModule(LightningModule):
                 path = ""
                 from pytorch_fid import fid_score
 
-                fid = fid_score.calculate_fid_given_paths(
-                    ["images", path], 256, "cuda", 2048, 0
-                )
+                fid = fid_score.calculate_fid_given_paths(["images", path], 256, "cuda", 2048, 0)
                 self.log(f"{prefix}/fid", fid)
 
         # ts, x, x0, x_rest = self.preprocess_epoch_end(outputs, prefix)
@@ -267,7 +260,7 @@ class YodaLitModule(LightningModule):
                     pred,
                     gt,
                     title=f"{self.current_epoch}_samples",
-                    path = self.hparams.path,
+                    path=self.hparams.path,
                     wandb_logger=wandb_logger,
                 )
 

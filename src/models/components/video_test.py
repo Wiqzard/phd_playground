@@ -4,10 +4,10 @@ import torch.nn.functional as F
 
 
 class DoubleConv(nn.Module):
-    """(convolution => [BN] => ReLU) * 2"""
+    """(convolution => [BN] => ReLU) * 2."""
 
     def __init__(self, in_channels, out_channels):
-        super(DoubleConv, self).__init__()
+        super().__init__()
         self.double_conv = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
             nn.BatchNorm2d(out_channels),
@@ -22,23 +22,21 @@ class DoubleConv(nn.Module):
 
 
 class Down(nn.Module):
-    """Downscaling with maxpool then double conv"""
+    """Downscaling with maxpool then double conv."""
 
     def __init__(self, in_channels, out_channels):
-        super(Down, self).__init__()
-        self.maxpool_conv = nn.Sequential(
-            nn.MaxPool2d(2), DoubleConv(in_channels, out_channels)
-        )
+        super().__init__()
+        self.maxpool_conv = nn.Sequential(nn.MaxPool2d(2), DoubleConv(in_channels, out_channels))
 
     def forward(self, x):
         return self.maxpool_conv(x)
 
 
 class Up(nn.Module):
-    """Upscaling then double conv"""
+    """Upscaling then double conv."""
 
     def __init__(self, in_channels, out_channels, bilinear=True):
-        super(Up, self).__init__()
+        super().__init__()
 
         if bilinear:
             self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
@@ -60,7 +58,7 @@ class Up(nn.Module):
 
 class OutConv(nn.Module):
     def __init__(self, in_channels, out_channels):
-        super(OutConv, self).__init__()
+        super().__init__()
         self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=1)
 
     def forward(self, x):
@@ -69,7 +67,7 @@ class OutConv(nn.Module):
 
 class SmallerVideoUNet(nn.Module):
     def __init__(self, n_channels, input_length, output_length, bilinear=True):
-        super(SmallerVideoUNet, self).__init__()
+        super().__init__()
         self.input_length = input_length
         self.output_length = output_length
         self.n_channels = n_channels
@@ -98,9 +96,7 @@ class SmallerVideoUNet(nn.Module):
         x = self.up3(x, x2)
         x = self.up4(x, x1)
         out = self.outc(x)
-        return out.view(
-            x.size(0), self.output_length, self.n_channels, x.size(2), x.size(3)
-        )
+        return out.view(x.size(0), self.output_length, self.n_channels, x.size(2), x.size(3))
 
 
 # Example usage:

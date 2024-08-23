@@ -1,15 +1,15 @@
-from typing import Any, Dict, Optional, Tuple
 import os
 import random
 from glob import glob
+from typing import Any, Dict, Optional, Tuple
 
-import torch
-from torch.utils.data import Dataset, DataLoader, random_split
-from torchvision import transforms
-from PIL import Image
-from lightning import LightningDataModule
 import hydra
+import torch
+from lightning import LightningDataModule
 from omegaconf import DictConfig
+from PIL import Image
+from torch.utils.data import DataLoader, Dataset, random_split
+from torchvision import transforms
 
 
 class VideoFramesDataset(Dataset):
@@ -83,7 +83,7 @@ class VideoFramesDataset(Dataset):
         for frame in selected_frames:
             try:
                 image = Image.open(frame).convert("RGB")
-            except (IOError, OSError) as e:
+            except OSError as e:
                 raise RuntimeError(f"Error opening image {frame}: {e}")
             if self.transform:
                 image = self.transform(image)
@@ -133,9 +133,7 @@ class VideoFramesDataModule(LightningDataModule):
                 raise RuntimeError(
                     f"Batch size ({self.hparams.batch_size}) is not divisible by the number of devices ({self.trainer.world_size})."
                 )
-            self.batch_size_per_device = (
-                self.hparams.batch_size // self.trainer.world_size
-            )
+            self.batch_size_per_device = self.hparams.batch_size // self.trainer.world_size
 
         if not self.data_train and not self.data_val and not self.data_test:
             dataset = VideoFramesDataset(

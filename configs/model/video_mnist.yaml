@@ -15,10 +15,9 @@ scheduler:
 
 net:
   _target_: src.models.components.video_test.SmallerVideoUNet
-  n_channels: 1  
+  n_channels: 1
   input_length: 10
   output_length: 10
 
 # compile model for faster training with pytorch 2.0
 compile: false
-

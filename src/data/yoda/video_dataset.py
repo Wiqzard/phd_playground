@@ -1,23 +1,24 @@
 from typing import Any, Dict, Optional, Tuple
+import random
+
 import albumentations as alb
 import h5py
 import numpy as np
 import torch
 import torch.nn as nn
 import torchvision.transforms.functional as F
-from torch.utils.data import Dataset
-from torchvision import transforms as T
-
 from lightning import LightningDataModule
 from torch.utils.data import ConcatDataset, DataLoader, Dataset, random_split
+from torchvision import transforms as T
 from torchvision.datasets import MNIST
 from torchvision.transforms import transforms
+
 from .h5 import HDF5Dataset
 
 
 class Aug(nn.Module):
     def __init__(self, b: float, c: float, s: float, h: float):
-        super(Aug, self).__init__()
+        super().__init__()
 
         self.b = b
         self.c = c
@@ -35,7 +36,7 @@ class Aug(nn.Module):
 
 class RandomConsistentAugFactory(nn.Module):
     def __init__(self, aug: bool = True):
-        super(RandomConsistentAugFactory, self).__init__()
+        super().__init__()
 
         self.aug = aug
 
@@ -54,7 +55,6 @@ class RandomConsistentAugFactory(nn.Module):
 
 
 class VideoDataset(Dataset):
-
     def __init__(
         self,
         data_path,
@@ -69,8 +69,8 @@ class VideoDataset(Dataset):
         albumentations=False,
         with_flows=False,
         total_videos=-1,
+        num_steps=1,
     ):
-
         self.data_path = data_path
         self.frames_per_sample = frames_per_sample
         self.random_time = random_time
@@ -79,6 +79,7 @@ class VideoDataset(Dataset):
         self.random_time_reverse = random_time_reverse
         self.total_videos = total_videos
         self.with_flows = with_flows
+        self.num_steps = num_steps
 
         if self.random_time_reverse:
             assert (
@@ -111,16 +112,23 @@ class VideoDataset(Dataset):
         # Read h5 files as dataset
         self.videos_ds = HDF5Dataset(self.data_path)
 
-        print(f"Dataset length: {self.__len__()}")
+        print(f"Dataset length: {self.total_videos}")
+        print(f"Number of steps: {self.num_steps}")
 
     def __len__(self):
+        return self.num_steps
+
+    @property
+    def num_videos(self):
         return self.total_videos if self.total_videos > 0 else len(self.videos_ds)
 
     def max_index(self):
         return len(self.videos_ds)
 
     def __getitem__(self, index, time_idx=0):
-        video_index = round(index / (self.__len__() - 1) * (self.max_index() - 1))
+        video_index = round((index % self.num_videos) / (self.num_videos - 1) * (self.max_index() - 1))
+        #video_index = round(index / (self.num_videos - 1) * (self.max_index() - 1))
+        #shard_idx, idx_in_shard = self.videos_ds.get_indices(video_index)
         shard_idx, idx_in_shard = self.videos_ds.get_indices(video_index)
 
         # Setup augmentations
@@ -131,15 +139,13 @@ class VideoDataset(Dataset):
         with h5py.File(self.videos_ds.shard_paths[shard_idx], "r") as f:
             video_len = f["len"][str(idx_in_shard)][()]
             num_frames = (self.skip_frames + 1) * (self.frames_per_sample - 1) + 1
-            assert (
-                video_len >= num_frames
-            ), "The video is shorter than the desired sample size"
+            assert video_len >= num_frames, "The video is shorter than the desired sample size"
             if self.random_time:
                 time_idx = np.random.choice(video_len - num_frames)
             assert time_idx < video_len, "Time index out of video boundary"
-            for i in range(
-                time_idx, min(time_idx + num_frames, video_len), self.skip_frames + 1
-            ):
+
+            
+            for i in range(time_idx, min(time_idx + num_frames, video_len), self.skip_frames + 1):
                 if "videos" in f:
                     img = f["videos"][str(idx_in_shard)][str(i)][()]
                 else:
@@ -183,6 +189,7 @@ class VideoDataModule(LightningDataModule):
         input_size: int,
         crop_size: int,
         frames_per_sample: int = 5,
+        num_steps: int = 10000,
         skip_frames: int = 0,
         random_time: bool = True,
         random_horizontal_flip: bool = True,
@@ -224,7 +231,10 @@ class VideoDataModule(LightningDataModule):
         self.data_test: Optional[Dataset] = None
 
     def prepare_data(self) -> None:
-        """Prepare data if needed. This method is called only on one process."""
+        """Prepare data if needed.
+
+        This method is called only on one process.
+        """
         # You can implement downloading or processing logic here if needed.
         pass
 
@@ -242,6 +252,7 @@ class VideoDataModule(LightningDataModule):
             albumentations=self.hparams.albumentations,
             with_flows=self.hparams.with_flows,
             total_videos=self.hparams.total_videos,
+            num_steps=self.hparams.num_steps,
         )
 
     def setup(self, stage: Optional[str] = None) -> None:

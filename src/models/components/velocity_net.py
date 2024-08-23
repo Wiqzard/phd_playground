@@ -1,13 +1,13 @@
-import sys
 import os
-from typing import Any, List, Tuple
+import sys
 from functools import partial, wraps
+from typing import Any, List, Tuple
 
 import torch
 import torch.nn as nn
 from einops import rearrange
-from tqdm import tqdm
 from torchdiffeq import odeint
+from tqdm import tqdm
 
 # from lutils.configuration import Configuration
 # from lutils.dict_wrapper import DictWrapper
@@ -44,7 +44,7 @@ class VideoAutoencoder(nn.Module):
         hf_token: str = None,
         model_id: str = None,
     ):
-        super(VideoAutoencoder, self).__init__()
+        super().__init__()
         self.type = type
         self.ckpt_path = ckpt_path
         self.hf_token = hf_token
@@ -98,9 +98,7 @@ class VideoAutoencoder(nn.Module):
         if self.type == "ours":
             reconstructed_observations = self.ae.backbone.decode_from_latents(latents)
         elif self.type == "svd":
-            reconstructed_observations = self.ae.decode(
-                latents, num_frames=num_frames
-            ).sample
+            reconstructed_observations = self.ae.decode(latents, num_frames=num_frames).sample
         else:
             reconstructed_observations = self.ae.decode(latents)
 
@@ -124,7 +122,7 @@ class VelocityNet(nn.Module):
         num_cond_frames: int = 5,
         hist_window_size: int = 5,
     ):
-        super(VelocityNet, self).__init__()
+        super().__init__()
 
         self.autoencoder = autoencoder
         self.flow_network = flow_network
@@ -154,9 +152,7 @@ class VelocityNet(nn.Module):
                 is_ddp = True
                 break
         if is_ddp:
-            state = {
-                k.replace("module.", ""): v for k, v in loaded_state["model"].items()
-            }
+            state = {k.replace("module.", ""): v for k, v in loaded_state["model"].items()}
         else:
             state = {f"module.{k}": v for k, v in loaded_state["model"].items()}
 
@@ -172,9 +168,7 @@ class VelocityNet(nn.Module):
             state = model_state_dict
 
         dmodel = (
-            self.module
-            if isinstance(self, torch.nn.parallel.DistributedDataParallel)
-            else self
+            self.module if isinstance(self, torch.nn.parallel.DistributedDataParallel) else self
         )
         dmodel.load_state_dict(state)
         print(f"Loaded weights for keys: {state}")
@@ -207,9 +201,7 @@ class VelocityNet(nn.Module):
             flows = flows.reshape(-1, 2, *flows.shape[-2:])
 
         # Sparsify flows
-        sparsification_results = self.sparsification_network(
-            flows, num_vectors=num_vectors
-        )
+        sparsification_results = self.sparsification_network(flows, num_vectors=num_vectors)
         sparse_flows = sparsification_results[0]
 
         return sparse_flows
@@ -218,51 +210,55 @@ class VelocityNet(nn.Module):
         batch_size, n_obs = input_latents.size(0), input_latents.size(1)
         flow_states = context[1]
         index_distances = context[0]
-        #index_distances = (
+        # index_distances = (
         #    torch.arange(n_obs, device=input_latents.device)
         #    .flip(0)
         #    .unsqueeze(0)
         #    .repeat(batch_size, 1)
-        #)
+        # )
         # Predict vectors using the regressor
         reconstructed_vectors = self.vector_field_regressor(
             sample=input_latents,
             timestep=t.squeeze(),
             encoder_hidden_states=flow_states,
             added_time_ids=index_distances,
-            skip_action=torch.rand(1, device=input_latents.device).item()
-            < self.skip_prob,
+            skip_action=torch.rand(1, device=input_latents.device).item() < self.skip_prob,
         )
         return reconstructed_vectors
-    
-    def get_input_frames(self, X: torch.Tensor, training:bool=False) -> Tuple[torch.Tensor, torch.Tensor]:
+
+    def get_input_frames(
+        self, X: torch.Tensor, training: bool = False
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         # last frames
-        reference_frames = X[:, -self.num_ref_frames:]
+        reference_frames = X[:, -self.num_ref_frames :]
 
         # sample within the history window before reference frames
         upper_bound = min(X.shape[1] - self.num_ref_frames, self.hist_window_size)
 
-        conditioning_frames_idx = torch.sort(
-            torch.randperm(upper_bound)[:self.num_cond_frames]
-        )[0].unsqueeze(0).repeat(X.shape[0], 1).flip(1)
+        conditioning_frames_idx = (
+            torch.sort(torch.randperm(upper_bound)[: self.num_cond_frames])[0]
+            .unsqueeze(0)
+            .repeat(X.shape[0], 1)
+            .flip(1)
+        )
 
-        conditioning_frames = X[:, :-self.num_ref_frames][
+        conditioning_frames = X[:, : -self.num_ref_frames][
             torch.arange(X.shape[0]).unsqueeze(1), -conditioning_frames_idx
         ]
 
-        time_ids_conditioning =  self.num_ref_frames + conditioning_frames_idx
+        time_ids_conditioning = self.num_ref_frames + conditioning_frames_idx
         time_ids_reference = torch.arange(0, self.num_ref_frames).flip(0)
 
-        time_ids = torch.cat([time_ids_conditioning, time_ids_reference.unsqueeze(0).expand(X.shape[0], -1)], dim=1).to(X.device)
-                
+        time_ids = torch.cat(
+            [time_ids_conditioning, time_ids_reference.unsqueeze(0).expand(X.shape[0], -1)], dim=1
+        ).to(X.device)
+
         frames = torch.cat([conditioning_frames, reference_frames], dim=1)
 
         if training:
             frames = self.autoencoder._encode_observations(frames)
 
         return frames, time_ids
-
-
 
     @manage_gpu_memory
     def generate_frames(
@@ -275,8 +271,7 @@ class VelocityNet(nn.Module):
         skip_past: bool = False,
         verbose: bool = False,
     ) -> torch.Tensor:
-        """
-        Generates num_frames frames conditioned on observations.
+        """Generates num_frames frames conditioned on observations.
 
         :param observations: Tensor of shape [b, 1, num_channels, height, width]
         :param sparse_flows: Tensor of shape [b, n, 3, height, width], None for no actions
@@ -290,7 +285,7 @@ class VelocityNet(nn.Module):
         """
 
         # Encode observations to latents
-        observations = observations[:, -(self.num_cond_frames+self.num_ref_frames):]
+        observations = observations[:, -(self.num_cond_frames + self.num_ref_frames) :]
         with torch.no_grad():
             latents = self.autoencoder._encode_observations(observations)
 
@@ -300,12 +295,12 @@ class VelocityNet(nn.Module):
         num_actions = sparse_flows.size(1) if sparse_flows is not None else 0
 
         # Encode sparse flows
-        #if sparse_flows is not None:
+        # if sparse_flows is not None:
         #    sparse_flow_states = self.flow_representation_network(
         #        sparse_flows
         #    ).unsqueeze(1)
         #    num_actions = sparse_flow_states.size(1)
-        #else:
+        # else:
         #    sparse_flow_states = torch.zeros(
         #        [b, 1, self.vector_field_regressor.action_state_size, 16, 16],
         #        device=device,
@@ -383,9 +378,7 @@ class VelocityNet(nn.Module):
         next_latents = odeint(
             f,
             y0,
-            t=torch.linspace(
-                warm_start, 1, int((1 - warm_start) * steps), device=y0.device
-            ),
+            t=torch.linspace(warm_start, 1, int((1 - warm_start) * steps), device=y0.device),
             method="rk4",
         )[-1]
 

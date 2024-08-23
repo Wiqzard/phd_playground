@@ -1,24 +1,18 @@
-from typing import Optional, Tuple, Union
 import itertools
+from typing import Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
 
-
-from .utils import (
+from utils import (
     CrossAttnDownBlockSpatioTemporal,
+    CrossAttnUpBlockSpatioTemporal,
     DownBlockSpatioTemporal,
     TemporalDownSample,
-    SpatioTemporalResBlock,
-    TemporalResnetBlock,
     UNetMidBlockSpatioTemporal,
-    CrossAttnUpBlockSpatioTemporal,
     UpBlockSpatioTemporal,
 )
-from .utils.all import (
-    TimestepEmbedding,
-    Timesteps,
-)
+from utils.all import TimestepEmbedding, Timesteps
 
 
 def get_down_block(
@@ -132,7 +126,6 @@ def get_up_block(
     raise ValueError(f"{up_block_type} does not exist.")
 
 
-
 class VectorFieldRegressor(nn.Module):
     def __init__(
         self,
@@ -158,9 +151,8 @@ class VectorFieldRegressor(nn.Module):
         cross_attention_dim: Union[int, Tuple[int]] = 128,
         transformer_layers_per_block: Union[int, Tuple[int], Tuple[Tuple]] = 1,
         num_attention_heads: Union[int, Tuple[int]] = (2, 4, 8, 8),
-
         skip_action: bool = False,
-        num_frames_in_block: Tuple[int] = [10, 8, 6, 6, 4, 4, 2, 1]
+        num_frames_in_block: Tuple[int] = [10, 8, 6, 6, 4, 4, 2, 1],
     ):
         super().__init__()
 
@@ -215,7 +207,7 @@ class VectorFieldRegressor(nn.Module):
 
         self.skip_action = skip_action
         if skip_action:
-            self.dummy_action = nn.Parameter(torch.zeros(1, 1, 1, cross_attention_dim))
+            self.dummy_action = nn.Parameter(torch.zeros(1, 1, cross_attention_dim))
 
         # time
         time_embed_dim = block_out_channels[0] * 4
@@ -225,9 +217,7 @@ class VectorFieldRegressor(nn.Module):
 
         self.time_embedding = TimestepEmbedding(timestep_input_dim, time_embed_dim)
 
-        self.add_time_proj = Timesteps(
-            addition_time_embed_dim, True, downscale_freq_shift=0
-        )
+        self.add_time_proj = Timesteps(addition_time_embed_dim, True, downscale_freq_shift=0)
         self.add_embedding = TimestepEmbedding(
             projection_class_embeddings_input_dim, time_embed_dim
         )
@@ -245,12 +235,10 @@ class VectorFieldRegressor(nn.Module):
             layers_per_block = [layers_per_block] * len(down_block_types)
 
         if isinstance(transformer_layers_per_block, int):
-            transformer_layers_per_block = [transformer_layers_per_block] * len(
-                down_block_types
-            )
+            transformer_layers_per_block = [transformer_layers_per_block] * len(down_block_types)
 
         self.temporal_downsamples = nn.ModuleList([])
-        for i in range(len(self.num_frames_in_block) - 1 ):
+        for i in range(len(self.num_frames_in_block) - 1):
             if i > len(block_out_channels) - 1:
                 channels = block_out_channels[len(block_out_channels) - 1 - i]
             else:
@@ -295,8 +283,10 @@ class VectorFieldRegressor(nn.Module):
             )
             self.down_blocks.append(down_block)
 
-            res_out_frames.append((layers_per_block[i] + (not is_final_block) )  * [self.num_frames_in_block[i]])
-        
+            res_out_frames.append(
+                (layers_per_block[i] + (not is_final_block)) * [self.num_frames_in_block[i]]
+            )
+
         res_out_frames = list(itertools.chain(*res_out_frames))
 
         # mid
@@ -316,9 +306,7 @@ class VectorFieldRegressor(nn.Module):
         reversed_num_attention_heads = list(reversed(num_attention_heads))
         reversed_layers_per_block = list(reversed(layers_per_block))
         reversed_cross_attention_dim = list(reversed(cross_attention_dim))
-        reversed_transformer_layers_per_block = list(
-            reversed(transformer_layers_per_block)
-        )
+        reversed_transformer_layers_per_block = list(reversed(transformer_layers_per_block))
 
         output_channel = reversed_block_out_channels[0]
         for i, up_block_type in enumerate(up_block_types):
@@ -326,13 +314,11 @@ class VectorFieldRegressor(nn.Module):
 
             prev_output_channel = output_channel
             output_channel = reversed_block_out_channels[i]
-            input_channel = reversed_block_out_channels[
-                min(i + 1, len(block_out_channels) - 1)
-            ]
+            input_channel = reversed_block_out_channels[min(i + 1, len(block_out_channels) - 1)]
 
-            in_frames = list(reversed(res_out_frames[-reversed_layers_per_block[i]-1:]))
+            in_frames = list(reversed(res_out_frames[-reversed_layers_per_block[i] - 1 :]))
             out_frames = self.num_frames_in_block[i + len(down_block_types)]
-            res_out_frames = res_out_frames[:-reversed_layers_per_block[i]-1]
+            res_out_frames = res_out_frames[: -reversed_layers_per_block[i] - 1]
             # add upsample block for all BUT final layer
             if not is_final_block:
                 add_upsample = True
@@ -355,7 +341,7 @@ class VectorFieldRegressor(nn.Module):
                 num_attention_heads=reversed_num_attention_heads[i],
                 resnet_act_fn="silu",
                 in_frames=in_frames,
-                out_frames=out_frames
+                out_frames=out_frames,
             )
             self.up_blocks.append(up_block)
             prev_output_channel = output_channel
@@ -387,7 +373,7 @@ class VectorFieldRegressor(nn.Module):
             frames must be self.num_frames_in_block[0]
 
         timestep: [batch]
-        encoder_hidden_states: 
+        encoder_hidden_states:
             [batch, num_frames, n_tokens, channels] -> keep as is
             [batch, n_tokens, channels] -> repeat for num_frames
             [batch, num_frames, n_tokens, channels, height, width] -> pos_enc and flatten
@@ -400,7 +386,7 @@ class VectorFieldRegressor(nn.Module):
         timesteps = timestep
         if not torch.is_tensor(timesteps):
             if isinstance(timestep, float):
-                dtype =  torch.float64
+                dtype = torch.float64
             else:
                 dtype = torch.int64
             timesteps = torch.tensor([timesteps], dtype=dtype, device=sample.device)
@@ -435,25 +421,21 @@ class VectorFieldRegressor(nn.Module):
             batch_size, num_frames, dtype=sample.dtype, device=sample.device
         )
         if skip_action:
-            encoder_hidden_states = self.dummy_action.repeat(
-                batch_size, num_frames, 1, 1
-            )
-        encoder_hidden_states = encoder_hidden_states.reshape(
-            -1, *encoder_hidden_states.shape[2:]
-        )
+            encoder_hidden_states =  torch.zeros_like(encoder_hidden_states)
+
+        encoder_hidden_states = encoder_hidden_states.reshape(-1, *encoder_hidden_states.shape[2:])
         if encoder_hidden_states.shape[0] != sample.shape[0]:
-            encoder_hidden_states = encoder_hidden_states.repeat_interleave(
-                num_frames, dim=0
-            )
+            encoder_hidden_states = encoder_hidden_states.repeat_interleave(num_frames, dim=0)
+        
+        if self.skip_action:
+            encoder_hidden_states = encoder_hidden_states + self.dummy_action.repeat(batch_size *  num_frames,1, 1)
 
         # 2. pre-process
         sample = self.conv_in(sample)
 
         down_block_res_samples = (sample,)
         for i, downsample_block in enumerate(self.down_blocks):
-            image_only_indicator = image_only_indicator[
-                :, : self.num_frames_in_block[i]
-            ]
+            image_only_indicator = image_only_indicator[:, : self.num_frames_in_block[i]]
 
             if (
                 hasattr(downsample_block, "has_cross_attention")
@@ -474,16 +456,14 @@ class VectorFieldRegressor(nn.Module):
                 )
 
             if not isinstance(self.temporal_downsamples[i], nn.Identity):
-                sample, res_samples_, emb, encoder_hidden_states = self.temporal_downsamples[
-                    i
-                ](sample, None, emb, encoder_hidden_states)
+                sample, res_samples_, emb, encoder_hidden_states = self.temporal_downsamples[i](
+                    sample, None, emb, encoder_hidden_states
+                )
 
             down_block_res_samples += res_samples
             # 4. mid
 
-        image_only_indicator = image_only_indicator[
-            :, : self.num_frames_in_block[i + 1]
-        ]
+        image_only_indicator = image_only_indicator[:, : self.num_frames_in_block[i + 1]]
         sample = self.mid_block(
             hidden_states=sample,
             temb=emb,
@@ -494,11 +474,9 @@ class VectorFieldRegressor(nn.Module):
         # 5. up
         for i, upsample_block in enumerate(self.up_blocks):
             res_samples = down_block_res_samples[-len(upsample_block.resnets) :]
-            down_block_res_samples = down_block_res_samples[
-                : -len(upsample_block.resnets)
-            ]
+            down_block_res_samples = down_block_res_samples[: -len(upsample_block.resnets)]
             image_only_indicator = image_only_indicator[
-                :, : self.num_frames_in_block[i + len(self.down_blocks)] 
+                :, : self.num_frames_in_block[i + len(self.down_blocks)]
             ]
 
             if (
@@ -521,7 +499,9 @@ class VectorFieldRegressor(nn.Module):
                 )
 
             if i + len(self.down_blocks) < len(self.temporal_downsamples):
-                if not isinstance(self.temporal_downsamples[i+ len(self.down_blocks)], nn.Identity):
+                if not isinstance(
+                    self.temporal_downsamples[i + len(self.down_blocks)], nn.Identity
+                ):
                     sample, _, emb, encoder_hidden_states = self.temporal_downsamples[
                         i + len(self.down_blocks)
                     ](sample, None, emb, encoder_hidden_states)
@@ -540,10 +520,11 @@ class VectorFieldRegressor(nn.Module):
 
 
 if __name__ == "__main__":
-    device = "cpu"
-    bs, t, c, h, w = 2, 15, 4, 32, 32
+    device = "cuda"
+    bs, t, c, h, w = 3, 10, 4, 32, 32
+    c_time, c_dim, n_token = 1, 256, 64
     model = VectorFieldRegressor(
-        sample_size=[32, 32],
+        sample_size=[h, w],
         in_channels=4,
         out_channels=4,
         down_block_types=(
@@ -560,24 +541,25 @@ if __name__ == "__main__":
             "CrossAttnUpBlockSpatioTemporal",
             "CrossAttnUpBlockSpatioTemporal",
         ),
-        block_out_channels=(64, 128, 128, 256),
+        block_out_channels=(64, 128, 256, 512),
         addition_time_embed_dim=128,  # 256,
         projection_class_embeddings_input_dim=t * 128,  # 64,
-        layers_per_block=3,
-        cross_attention_dim=128,
+        layers_per_block=2,
+        cross_attention_dim=c_dim,
         transformer_layers_per_block=1,
         num_attention_heads=(2, 4, 4, 8),
-        num_frames_in_block=[15, 10, 8, 5, 4, 4, 2, 1],
-        skip_action=True
-        #num_frames_in_block=[10, 8, 5, 5, 4, 4, 2, 1]
+        num_frames_in_block=[10, 8, 8, 6, 4, 4, 2, 1],  # [15, 10, 8, 5, 4, 4, 2, 1],
+        skip_action=True,
+        # num_frames_in_block=[10, 8, 5, 5, 4, 4, 2, 1]
     ).to(device)
-    model.train()
+    model.eval()  # train()
     # num parameters of model
     print(f"{sum(p.numel() for p in model.parameters()):,}")
     with torch.no_grad():
         input = torch.randn(bs, t, c, h, w).to(device)
-        time_step = 100
-        encoder_hidden_states = torch.randn(bs, t, 3,  128).to(device)
+        # time_step = 30
+        time_step = torch.randint(0, 100, (bs,)).to(device)
+        encoder_hidden_states = torch.randn(bs, c_time, n_token, c_dim).to(device)
         additional_time_ids = torch.randn(bs, t).to(device)
 
         out = model(
@@ -585,6 +567,6 @@ if __name__ == "__main__":
             timestep=time_step,
             encoder_hidden_states=encoder_hidden_states,
             added_time_ids=additional_time_ids,
-            skip_action=False,#True,  # torch.rand(1, device=device).item() > 0.5,
+            skip_action=True,  # True,
         )
     print(out)
