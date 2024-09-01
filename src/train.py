@@ -1,4 +1,8 @@
+import os
 from typing import Any, Dict, List, Optional, Tuple
+
+print(20 * "IN train.py WE SET expandable_segments:True")
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 import hydra
 import lightning as L

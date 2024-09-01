@@ -156,6 +156,8 @@ class VectorFieldRegressor(nn.Module):
     ):
         super().__init__()
 
+        self.in_channels = in_channels
+        self.out_channels = out_channels
         self.sample_size = sample_size
         self.num_frames_in_block = num_frames_in_block
 
@@ -471,6 +473,8 @@ class VectorFieldRegressor(nn.Module):
             encoder_hidden_states=encoder_hidden_states,
             image_only_indicator=image_only_indicator,
         )
+        # for res_sample in down_block_res_samples[:]:
+        #    print(res_sample.shape)
 
         # 5. up
         for i, upsample_block in enumerate(self.up_blocks):
@@ -633,98 +637,98 @@ class VectorFieldRegressor(nn.Module):
 #
 # if __name__ == "__main__":
 #    main()
-##import torch
-##from torch.utils.data import Dataset, DataLoader
-##
-##class DummyDataset(Dataset):
-##    def __init__(self, num_samples=100):
-##        self.num_samples = num_samples
-##        self.t, self.c, self.h, self.w = 10, 4, 32, 32
-##        self.c_time, self.c_dim, self.n_token = 1, 256, 64
-##
-##    def __len__(self):
-##        return self.num_samples
-##
-##    def __getitem__(self, idx):
-##        input_data = torch.randn(self.t, self.c, self.h, self.w)
-##        time_step = torch.randint(0, 100, (1,))
-##        encoder_hidden_states = torch.randn( self.c_time, self.n_token, self.c_dim)
-##        additional_time_ids = torch.randn(self.t)
-##
-##        return input_data, time_step, encoder_hidden_states, additional_time_ids
-##
-##def get_dataloader(batch_size=1):
-##    dataset = DummyDataset()
-##    return DataLoader(dataset, batch_size=batch_size)
-##
-##import torch
-##import torch.nn.functional as F
-##from pytorch_lightning import LightningModule, Trainer
-##from pytorch_lightning.strategies import DDPStrategy
-##from torch.optim import Adam
-##
-##class VectorFieldRegressorLightning(LightningModule):
-##    def __init__(self):
-##        super(VectorFieldRegressorLightning, self).__init__()
-##        self.model = VectorFieldRegressor(
-##            sample_size=[32, 32],
-##            in_channels=4,
-##            out_channels=4,
-##            down_block_types=(
-##                "CrossAttnDownBlockSpatioTemporal",
-##                "CrossAttnDownBlockSpatioTemporal",
-##                "CrossAttnDownBlockSpatioTemporal",
-##                "DownBlockSpatioTemporal",
-##            ),
-##            up_block_types=(
-##                "UpBlockSpatioTemporal",
-##                "CrossAttnUpBlockSpatioTemporal",
-##                "CrossAttnUpBlockSpatioTemporal",
-##                "CrossAttnUpBlockSpatioTemporal",
-##            ),
-##            block_out_channels=(64, 128, 128, 128),
-##            addition_time_embed_dim=128,
-##            projection_class_embeddings_input_dim=10 * 128,
-##            layers_per_block=2,
-##            cross_attention_dim=256,
-##            transformer_layers_per_block=1,
-##            num_attention_heads=(2, 4, 4, 8),
-##            num_frames_in_block=[10, 8, 8, 6, 4, 4, 2, 1],
-##            skip_action=True,
-##        )
-##
-##    def forward(self, input_data, timestep, encoder_hidden_states, added_time_ids):
-##        return self.model(input_data, timestep, encoder_hidden_states, added_time_ids, skip_action=True)
-##
-##    def training_step(self, batch, batch_idx):
-##        input_data, timestep, encoder_hidden_states, added_time_ids = batch
-##        output = self(input_data, timestep.squeeze(1), encoder_hidden_states, added_time_ids)
-##        loss = output.sum()
-##        self.log("train_loss", loss)
-##        return loss
-##
-##    def configure_optimizers(self):
-##        return Adam(self.model.parameters(), lr=1e-4)
-##
-##def main():
-##    # Instantiate the model
-##    model = VectorFieldRegressorLightning()
-##
-##    # Get the dataloader
-##    train_dataloader = get_dataloader(batch_size=2)
-##
-##    # Initialize the trainer with DDP and the appropriate strategy
-##    trainer = Trainer(
-##        strategy=DDPStrategy(find_unused_parameters=True),
-##        devices=torch.cuda.device_count(),
-##        max_epochs=5,
-##    )
-##
-##    # Train the model
-##    trainer.fit(model, train_dataloader)
-##
-##if __name__ == "__main__":
-##    main()
+# import torch
+# from torch.utils.data import Dataset, DataLoader
+#
+# class DummyDataset(Dataset):
+#     def __init__(self, num_samples=100):
+#         self.num_samples = num_samples
+#         self.t, self.c, self.h, self.w = 10, 4, 32, 32
+#         self.c_time, self.c_dim, self.n_token = 1, 256, 64
+#
+#     def __len__(self):
+#         return self.num_samples
+#
+#     def __getitem__(self, idx):
+#         input_data = torch.randn(self.t, self.c, self.h, self.w)
+#         time_step = torch.randint(0, 100, (1,))
+#         encoder_hidden_states = torch.randn( self.c_time, self.n_token, self.c_dim)
+#         additional_time_ids = torch.randn(self.t)
+#
+#         return input_data, time_step, encoder_hidden_states, additional_time_ids
+#
+# def get_dataloader(batch_size=1):
+#     dataset = DummyDataset()
+#     return DataLoader(dataset, batch_size=batch_size)
+#
+# import torch
+# import torch.nn.functional as F
+# from pytorch_lightning import LightningModule, Trainer
+# from pytorch_lightning.strategies import DDPStrategy
+# from torch.optim import Adam
+#
+# class VectorFieldRegressorLightning(LightningModule):
+#     def __init__(self):
+#        super(VectorFieldRegressorLightning, self).__init__()
+#        self.model = VectorFieldRegressor(
+#            sample_size=[32, 32],
+#            in_channels=4,
+#            out_channels=4,
+#            down_block_types=(
+#                "CrossAttnDownBlockSpatioTemporal",
+#                "CrossAttnDownBlockSpatioTemporal",
+#                "CrossAttnDownBlockSpatioTemporal",
+#                "DownBlockSpatioTemporal",
+#            ),
+#            up_block_types=(
+#                "UpBlockSpatioTemporal",
+#                "CrossAttnUpBlockSpatioTemporal",
+#                "CrossAttnUpBlockSpatioTemporal",
+#                "CrossAttnUpBlockSpatioTemporal",
+#            ),
+#            block_out_channels=(64, 128, 128, 128),
+#            addition_time_embed_dim=128,
+#            projection_class_embeddings_input_dim=10 * 128,
+#            layers_per_block=2,
+#            cross_attention_dim=256,
+#            transformer_layers_per_block=1,
+#            num_attention_heads=(2, 4, 4, 8),
+#            num_frames_in_block=[10, 8, 8, 6, 4, 4, 2, 1],
+#            skip_action=True,
+#        )
+#
+#    def forward(self, input_data, timestep, encoder_hidden_states, added_time_ids):
+#        return self.model(input_data, timestep, encoder_hidden_states, added_time_ids, skip_action=True)
+#
+#    def training_step(self, batch, batch_idx):
+#        input_data, timestep, encoder_hidden_states, added_time_ids = batch
+#        output = self(input_data, timestep.squeeze(1), encoder_hidden_states, added_time_ids)
+#        loss = output.sum()
+#        self.log("train_loss", loss)
+#        return loss
+#
+#    def configure_optimizers(self):
+#        return Adam(self.model.parameters(), lr=1e-4)
+#
+# def main():
+#    # Instantiate the model
+#    model = VectorFieldRegressorLightning()
+#
+#    # Get the dataloader
+#    train_dataloader = get_dataloader(batch_size=2)
+#
+#    # Initialize the trainer with DDP and the appropriate strategy
+#    trainer = Trainer(
+#        strategy=DDPStrategy(find_unused_parameters=True),
+#        devices=torch.cuda.device_count(),
+#        max_epochs=5,
+#    )
+#
+#    # Train the model
+#    trainer.fit(model, train_dataloader)
+#
+# if __name__ == "__main__":
+#    main()
 #
 
 
@@ -830,61 +834,57 @@ class VectorFieldRegressor(nn.Module):
 
 ##################################################################################
 
-# if __name__ == "__main__":
-#    device = "cuda"
-#    bs, t, c, h, w = 3, 10, 4, 32, 32
-#    c_time, c_dim, n_token = 1, 256, 64
-#    model = VectorFieldRegressor(
-#        sample_size=[h, w],
-#        in_channels=4,
-#        out_channels=4,
-#        down_block_types=(
-#            "CrossAttnDownBlockSpatioTemporal",
-#            "CrossAttnDownBlockSpatioTemporal",
-#            # "DownBlockSpatioTemporal",
-#            "CrossAttnDownBlockSpatioTemporal",
-#            "DownBlockSpatioTemporal",
-#        ),
-#        up_block_types=(
-#            "UpBlockSpatioTemporal",
-#            "CrossAttnUpBlockSpatioTemporal",
-#            # "UpBlockSpatioTemporal",
-#            "CrossAttnUpBlockSpatioTemporal",
-#            "CrossAttnUpBlockSpatioTemporal",
-#        ),
-#        block_out_channels=(64, 128, 128, 128),
-#        addition_time_embed_dim=128,  # 256,
-#        projection_class_embeddings_input_dim=t * 128,  # 64,
-#        layers_per_block=2,
-#        cross_attention_dim=c_dim,
-#        transformer_layers_per_block=1,
-#        num_attention_heads=(2, 4, 4, 8),
-#        num_frames_in_block=[10, 8, 8, 6, 4, 4, 2, 1],  # [15, 10, 8, 5, 4, 4, 2, 1],
-#        skip_action=True,
-#        # num_frames_in_block=[10, 8, 5, 5, 4, 4, 2, 1]
-#    ).to(device)
-#    #model.eval()  # train()
-#    # num parameters of model
-#    print(f"{sum(p.numel() for p in model.parameters()):,}")
-#
-#    #with torch.no_grad():
-#    if True:
-#        input = torch.randn(bs, t, c, h, w).to(device)
-#        # time_step = 30
-#        time_step = torch.randint(0, 100, (bs,)).to(device)
-#        encoder_hidden_states = torch.randn(bs, c_time, n_token, c_dim).to(device)
-#        additional_time_ids = torch.randn(bs, t).to(device)
-#
-#        model.zero_grad()
-#        out = model(
-#            input,
-#            timestep=time_step,
-#            encoder_hidden_states=encoder_hidden_states,
-#            added_time_ids=additional_time_ids,
-#            skip_action=True, #False,
-#        )
-#        loss = out.sum()
-#        loss.backward()
-
-#    print(out)
-#
+if __name__ == "__main__":
+    device = "cpu"  # "cuda"
+    bs, t, c, h, w = 3, 6, 4, 32, 48
+    c_time, c_dim, n_token = 1, 256, 64
+    model = VectorFieldRegressor(
+        sample_size=[h, w],
+        in_channels=4,
+        out_channels=4,
+        down_block_types=(
+            "CrossAttnDownBlockSpatioTemporal",
+            "CrossAttnDownBlockSpatioTemporal",
+            # "DownBlockSpatioTemporal",
+            "CrossAttnDownBlockSpatioTemporal",
+            "DownBlockSpatioTemporal",
+        ),
+        up_block_types=(
+            "UpBlockSpatioTemporal",
+            "CrossAttnUpBlockSpatioTemporal",
+            # "UpBlockSpatioTemporal",
+            "CrossAttnUpBlockSpatioTemporal",
+            "CrossAttnUpBlockSpatioTemporal",
+        ),
+        block_out_channels=(128, 256, 256, 256),
+        addition_time_embed_dim=128,  # 256,
+        projection_class_embeddings_input_dim=t * 128,  # 64,
+        layers_per_block=2,
+        cross_attention_dim=c_dim,
+        transformer_layers_per_block=1,
+        num_attention_heads=(2, 4, 4, 8),
+        num_frames_in_block=[6, 4, 4, 4, 2, 2, 1, 1],  # [15, 10, 8, 5, 4, 4, 2, 1],
+        skip_action=True,
+        # num_frames_in_block=[10, 8, 5, 5, 4, 4, 2, 1]
+    ).to(device)
+    # model.eval()  # train()
+    # num parameters of model
+    print(f"{sum(p.numel() for p in model.parameters()):,}")
+    # with torch.no_grad():
+    if True:
+        input = torch.randn(bs, t, c, h, w).to(device)
+        # time_step = 30
+        time_step = torch.randint(0, 100, (bs,)).to(device)
+        encoder_hidden_states = torch.randn(bs, c_time, n_token, c_dim).to(device)
+        additional_time_ids = torch.randn(bs, t).to(device)
+        model.zero_grad()
+        out = model(
+            input,
+            timestep=time_step,
+            encoder_hidden_states=encoder_hidden_states,
+            added_time_ids=additional_time_ids,
+            skip_action=True,  # False,
+        )
+        loss = out.sum()
+        loss.backward()
+    print(out)

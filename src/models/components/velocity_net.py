@@ -52,8 +52,8 @@ class VideoAutoencoder(nn.Module):
 
         if type == "ours":
             raise NotImplementedError("Not implemented yet")
-            self.ae = build_vqvae(config=ae_config, convert_to_sequence=True)
-            self.ae.backbone.load_from_ckpt(ckpt_path)
+            # self.ae = build_vqvae(config=ae_config, convert_to_sequence=True)
+            # self.ae.backbone.load_from_ckpt(ckpt_path)
         elif type == "svd":
             from diffusers import AutoencoderKLTemporalDecoder
             from huggingface_hub import login
@@ -64,13 +64,13 @@ class VideoAutoencoder(nn.Module):
             )
         else:
             raise NotImplementedError("Not implemented yet")
-            if type == "f8":
-                ae_settings = vq_f8_ddconfig
-            elif type == "f8_small":
-                ae_settings = vq_f8_small_ddconfig
-            else:
-                ae_settings = vq_f16_ddconfig
-            self.ae = VQModelInterface(ae_settings, ckpt_path)
+            # if type == "f8":
+            #     ae_settings = vq_f8_ddconfig
+            # elif type == "f8_small":
+            #     ae_settings = vq_f8_small_ddconfig
+            # else:
+            #     ae_settings = vq_f16_ddconfig
+            # self.ae = VQModelInterface(ae_settings, ckpt_path)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         latents = self._encode_observations(x)
@@ -177,6 +177,8 @@ class VelocityNet(nn.Module):
         with torch.no_grad():
             if flows is None:
                 flows = self.flow_network(X[:, -2:]).squeeze(1)
+                # flows = self.flow_network(X[:, -8:]).squeeze()
+                # print(flows.shape)
             else:
                 flows = flows[:, -1].unsqueeze(1)
         sparse_flows = self.sparsification_network(flows)[0]
@@ -230,24 +232,41 @@ class VelocityNet(nn.Module):
         self, X: torch.Tensor, training: bool = False
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         # last frames
-        reference_frames = X[:, -self.num_ref_frames :]
+        num_ref_frames = self.num_ref_frames
+        # the last frame will be the ground truth
+        if training:
+            num_ref_frames += 1
 
-        # sample within the history window before reference frames
-        upper_bound = min(X.shape[1] - self.num_ref_frames, self.hist_window_size)
+        reference_frames = X[:, -num_ref_frames:]
 
-        conditioning_frames_idx = (
-            torch.sort(torch.randperm(upper_bound)[: self.num_cond_frames])[0]
-            .unsqueeze(0)
-            .repeat(X.shape[0], 1)
-            .flip(1)
-        )
+        deterministic = False  # True #False
+        if not deterministic:
+            # sample within the history window before reference frames
+            upper_bound = min(X.shape[1] - num_ref_frames, self.hist_window_size)
 
-        conditioning_frames = X[:, : -self.num_ref_frames][
+            conditioning_frames_idx = (
+                torch.sort(torch.randperm(upper_bound)[: self.num_cond_frames])[0]
+                .unsqueeze(0)
+                .repeat(X.shape[0], 1)
+                .flip(1)
+            ) + 1
+        else:
+            conditioning_frames_idx = (
+                torch.arange(
+                    X.shape[1] - num_ref_frames - self.num_cond_frames, X.shape[1] - num_ref_frames
+                )
+                .unsqueeze(0)
+                .repeat(X.shape[0], 1)
+                + 1
+            )
+
+        conditioning_frames = X[:, :-num_ref_frames][
             torch.arange(X.shape[0]).unsqueeze(1), -conditioning_frames_idx
         ]
 
-        time_ids_conditioning = self.num_ref_frames + conditioning_frames_idx
-        time_ids_reference = torch.arange(0, self.num_ref_frames).flip(0)
+        time_ids_conditioning = num_ref_frames + conditioning_frames_idx
+        # append for the denoising frame if not training
+        time_ids_reference = torch.arange(0, num_ref_frames + (not training)).flip(0)
 
         time_ids = torch.cat(
             [time_ids_conditioning, time_ids_reference.unsqueeze(0).expand(X.shape[0], -1)], dim=1
@@ -294,19 +313,6 @@ class VelocityNet(nn.Module):
         sparse_flows = context
         num_actions = sparse_flows.size(1) if sparse_flows is not None else 0
 
-        # Encode sparse flows
-        # if sparse_flows is not None:
-        #    sparse_flow_states = self.flow_representation_network(
-        #        sparse_flows
-        #    ).unsqueeze(1)
-        #    num_actions = sparse_flow_states.size(1)
-        # else:
-        #    sparse_flow_states = torch.zeros(
-        #        [b, 1, self.vector_field_regressor.action_state_size, 16, 16],
-        #        device=device,
-        #    )
-        #    num_actions = 0
-
         # Generate future latents
         gen = tqdm(
             range(num_frames),
@@ -316,6 +322,7 @@ class VelocityNet(nn.Module):
         )
 
         for i in gen:
+            print(latents.shape)
             latents = self._generate_next_latent(
                 latents,
                 sparse_flows,
@@ -352,7 +359,7 @@ class VelocityNet(nn.Module):
             # calculate time_ids + flows
 
             sample_latents, index_distances = self.get_input_frames(latents, training=False)
-            sample_latents = torch.cat([sample_latents[:, :-1], y.unsqueeze(1)], dim=1)
+            sample_latents = torch.cat([sample_latents, y.unsqueeze(1)], dim=1)
 
             # Calculate vectors
             vectors = self.vector_field_regressor(

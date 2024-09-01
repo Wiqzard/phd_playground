@@ -3195,7 +3195,7 @@ class UpBlockSpatioTemporal(nn.Module):
         self.out_frames = out_frames
         # if all elements in in_frames are the same set in_frames = in_frames[0]
         if type(in_frames) == list:
-            if len(set(in_frames)) == 1:
+            if False:  # len(set(in_frames)) == 1 and len(set()):
                 in_frames = in_frames[0]
 
                 if in_frames != out_frames:
@@ -3247,7 +3247,7 @@ class UpBlockSpatioTemporal(nn.Module):
             res_hidden_states_tuple = res_hidden_states_tuple[:-1]
 
             if len(self.temporal_downsample) == 1:
-                if self.in_frames != self.out_frames:
+                if self.in_frames[i] != self.out_frames:
                     res_hidden_states = self.temporal_downsample[0](res_hidden_states)[0]
             elif len(self.temporal_downsample) > 1:
                 res_hidden_states = self.temporal_downsample[i](res_hidden_states)[0]

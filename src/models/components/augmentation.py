@@ -282,6 +282,7 @@ class AugmentedVectorField(nn.Module):
         with torch.set_grad_enabled(True):
             # first dimensions reserved for augmentations
             x = state
+
             if augmented_input:
                 x = x[:, n_aug:].requires_grad_(True)
 

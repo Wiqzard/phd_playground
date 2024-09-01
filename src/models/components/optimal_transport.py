@@ -54,6 +54,19 @@ class OTPlanSampler:
             print(x0, x1)
         return p
 
+    def get_min_cost(self, x0, x1):
+        a, b = pot.unif(x0.shape[0]), pot.unif(x1.shape[0])
+        if x0.dim() > 2:
+            x0 = x0.reshape(x0.shape[0], -1)
+        if x1.dim() > 2:
+            x1 = x1.reshape(x1.shape[0], -1)
+        x1 = x1.reshape(x1.shape[0], -1)
+        M = torch.cdist(x0, x1) ** 2
+        M = (M / M.max()).detach().cpu().numpy()
+        min_idx, cost = np.unravel_index(M.argmin(), M.shape), M.min()
+        return min_idx, cost
+        # return x0[min_idx[0]], x1[min_idx[1]]
+
     def sample_map(self, pi, batch_size):
         p = pi.flatten()
         p = p / p.sum()

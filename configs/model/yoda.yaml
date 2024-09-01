@@ -4,13 +4,19 @@ num_val_frames: 15
 sigma_min: 0.1
 test_nfe: 100
 plot: False
-path: ${paths.output_dir}
+path: ${paths.log_dir}
 
 optimizer:
   _target_: torch.optim.AdamW
   _partial_: true
-  lr: 0.001
+  lr: 0.0001
   weight_decay: 1e-5
+
+scheduler:
+  _target_: torch.optim.lr_scheduler.StepLR
+  _partial_: true
+  step_size: 1
+  gamma: 1
 
 net:
   _target_: src.models.components.velocity_net.VelocityNet
@@ -18,8 +24,8 @@ net:
   skip_prob: 0.5
 
   # maybe put this in data config
-  num_ref_frames: 5 # the last reference frames gets used for the vector field
-  num_cond_frames: 5
+  num_ref_frames: 4 # the total input frames are num_ref_frames + num_cond_frames + 1
+  num_cond_frames: 1
   hist_window_size: 10 # sample conditioning frames window before reference frames
 
   autoencoder:
@@ -31,7 +37,7 @@ net:
 
   flow_network:
     _target_: src.models.components.yoda.flow_network.FlowNetwork
-    scale: 4.0
+    scale: 1.0
 
   sparsification_network:
     _target_: src.models.components.yoda.sparsification_network.SparsificationNetwork
@@ -66,24 +72,24 @@ net:
         "CrossAttnUpBlockSpatioTemporal",
         "CrossAttnUpBlockSpatioTemporal",
       ]
-    block_out_channels: [64, 128, 256, 512] #[32, 32, 32, 32] ##
+    block_out_channels: [128, 256, 512, 512] # [32, 32, 32, 32]
     addition_time_embed_dim: 128
-    projection_class_embeddings_input_dim: 1280 # input_frames * added_time_embed_dim
+    projection_class_embeddings_input_dim: 768 # 1280 # input_frames * added_time_embed_dim
     layers_per_block: 2
-    cross_attention_dim: 256 #128
+    cross_attention_dim: 256
     transformer_layers_per_block: 1
     num_attention_heads: [2, 4, 4, 8]
-    num_frames_in_block: [10, 8, 8, 6, 4, 4, 2, 1]
+    num_frames_in_block: [6, 4, 4, 4, 2, 2, 1, 1] #[10, 8, 8, 6, 4, 4, 2, 1]
     skip_action: True
 
 augmentations:
   _target_: src.models.components.augmentation.AugmentationModule
   cnf_estimator: null
-  l1_reg: 0.
-  l2_reg: 0.
+  l1_reg: 0
+  l2_reg: 0 #this just regularizes the flow field with l1 norm to 0
   squared_l2_reg: 0.
   jacobian_frobenius_reg: 0.
-  jacobian_diag_frobenius_reg: 0.
+  jacobian_diag_frobenius_reg: 0
   jacobian_off_diag_frobenius_reg: 0.
 
 partial_solver:
@@ -93,11 +99,7 @@ partial_solver:
   atol: 1e-5
   rtol: 1e-5
 
-ot_sampler: null
+ot_sampler: null #exact # sinkhorn, null
+
 # write config check to make sure that the values here are correct for the dataset
 # also we want here other inputs like fps, etc. maybe pass the whole dataset
-
-# Set to integer if want to train with left out timepoint
-#leaveout_timepoint: -1
-
-#plot: False
