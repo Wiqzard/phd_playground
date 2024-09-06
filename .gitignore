@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 *$py.class
+outputs/
 
 # C extensions
 *.so
@@ -148,6 +149,7 @@ dmypy.json
 configs/local/default.yaml
 /data/
 /logs/
+/node_modules
 .env
 
 # Aim logging

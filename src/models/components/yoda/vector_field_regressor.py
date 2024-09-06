@@ -4,7 +4,7 @@ from typing import Optional, Tuple, Union
 import torch
 import torch.nn as nn
 
-from .utils import (
+from utils import (
     CrossAttnDownBlockSpatioTemporal,
     CrossAttnUpBlockSpatioTemporal,
     DownBlockSpatioTemporal,
@@ -12,7 +12,7 @@ from .utils import (
     UNetMidBlockSpatioTemporal,
     UpBlockSpatioTemporal,
 )
-from .utils.all import TimestepEmbedding, Timesteps
+from utils.all import TimestepEmbedding, Timesteps
 
 
 def get_down_block(
@@ -219,7 +219,9 @@ class VectorFieldRegressor(nn.Module):
 
         self.time_embedding = TimestepEmbedding(timestep_input_dim, time_embed_dim)
 
-        self.add_time_proj = Timesteps(addition_time_embed_dim, True, downscale_freq_shift=0)
+        self.add_time_proj = Timesteps(
+            addition_time_embed_dim, True, downscale_freq_shift=0
+        )
         self.add_embedding = TimestepEmbedding(
             projection_class_embeddings_input_dim, time_embed_dim
         )
@@ -237,7 +239,9 @@ class VectorFieldRegressor(nn.Module):
             layers_per_block = [layers_per_block] * len(down_block_types)
 
         if isinstance(transformer_layers_per_block, int):
-            transformer_layers_per_block = [transformer_layers_per_block] * len(down_block_types)
+            transformer_layers_per_block = [transformer_layers_per_block] * len(
+                down_block_types
+            )
 
         self.temporal_downsamples = nn.ModuleList([])
         for i in range(len(self.num_frames_in_block) - 1):
@@ -286,7 +290,8 @@ class VectorFieldRegressor(nn.Module):
             self.down_blocks.append(down_block)
 
             res_out_frames.append(
-                (layers_per_block[i] + (not is_final_block)) * [self.num_frames_in_block[i]]
+                (layers_per_block[i] + (not is_final_block))
+                * [self.num_frames_in_block[i]]
             )
 
         res_out_frames = list(itertools.chain(*res_out_frames))
@@ -308,7 +313,9 @@ class VectorFieldRegressor(nn.Module):
         reversed_num_attention_heads = list(reversed(num_attention_heads))
         reversed_layers_per_block = list(reversed(layers_per_block))
         reversed_cross_attention_dim = list(reversed(cross_attention_dim))
-        reversed_transformer_layers_per_block = list(reversed(transformer_layers_per_block))
+        reversed_transformer_layers_per_block = list(
+            reversed(transformer_layers_per_block)
+        )
 
         output_channel = reversed_block_out_channels[0]
         for i, up_block_type in enumerate(up_block_types):
@@ -316,9 +323,13 @@ class VectorFieldRegressor(nn.Module):
 
             prev_output_channel = output_channel
             output_channel = reversed_block_out_channels[i]
-            input_channel = reversed_block_out_channels[min(i + 1, len(block_out_channels) - 1)]
+            input_channel = reversed_block_out_channels[
+                min(i + 1, len(block_out_channels) - 1)
+            ]
 
-            in_frames = list(reversed(res_out_frames[-reversed_layers_per_block[i] - 1 :]))
+            in_frames = list(
+                reversed(res_out_frames[-reversed_layers_per_block[i] - 1 :])
+            )
             out_frames = self.num_frames_in_block[i + len(down_block_types)]
             res_out_frames = res_out_frames[: -reversed_layers_per_block[i] - 1]
             # add upsample block for all BUT final layer
@@ -424,9 +435,13 @@ class VectorFieldRegressor(nn.Module):
         if skip_action:
             encoder_hidden_states = torch.zeros_like(encoder_hidden_states)
 
-        encoder_hidden_states = encoder_hidden_states.reshape(-1, *encoder_hidden_states.shape[2:])
+        encoder_hidden_states = encoder_hidden_states.reshape(
+            -1, *encoder_hidden_states.shape[2:]
+        )
         if encoder_hidden_states.shape[0] != sample.shape[0]:
-            encoder_hidden_states = encoder_hidden_states.repeat_interleave(num_frames, dim=0)
+            encoder_hidden_states = encoder_hidden_states.repeat_interleave(
+                num_frames, dim=0
+            )
 
         if self.skip_action:
             encoder_hidden_states = encoder_hidden_states + self.dummy_action.repeat(
@@ -438,7 +453,9 @@ class VectorFieldRegressor(nn.Module):
 
         down_block_res_samples = (sample,)
         for i, downsample_block in enumerate(self.down_blocks):
-            image_only_indicator = image_only_indicator[:, : self.num_frames_in_block[i]]
+            image_only_indicator = image_only_indicator[
+                :, : self.num_frames_in_block[i]
+            ]
 
             if (
                 hasattr(downsample_block, "has_cross_attention")
@@ -459,14 +476,18 @@ class VectorFieldRegressor(nn.Module):
                 )
 
             if not isinstance(self.temporal_downsamples[i], nn.Identity):
-                sample, res_samples_, emb, encoder_hidden_states = self.temporal_downsamples[i](
-                    sample, None, emb, encoder_hidden_states
+                sample, res_samples_, emb, encoder_hidden_states = (
+                    self.temporal_downsamples[i](
+                        sample, None, emb, encoder_hidden_states
+                    )
                 )
 
             down_block_res_samples += res_samples
             # 4. mid
 
-        image_only_indicator = image_only_indicator[:, : self.num_frames_in_block[i + 1]]
+        image_only_indicator = image_only_indicator[
+            :, : self.num_frames_in_block[i + 1]
+        ]
         sample = self.mid_block(
             hidden_states=sample,
             temb=emb,
@@ -479,7 +500,9 @@ class VectorFieldRegressor(nn.Module):
         # 5. up
         for i, upsample_block in enumerate(self.up_blocks):
             res_samples = down_block_res_samples[-len(upsample_block.resnets) :]
-            down_block_res_samples = down_block_res_samples[: -len(upsample_block.resnets)]
+            down_block_res_samples = down_block_res_samples[
+                : -len(upsample_block.resnets)
+            ]
             image_only_indicator = image_only_indicator[
                 :, : self.num_frames_in_block[i + len(self.down_blocks)]
             ]
@@ -516,7 +539,9 @@ class VectorFieldRegressor(nn.Module):
         sample = self.conv_act(sample)
         sample = self.conv_out(sample)
 
-        sample = sample.reshape(batch_size, self.num_frames_in_block[-1], *sample.shape[1:])
+        sample = sample.reshape(
+            batch_size, self.num_frames_in_block[-1], *sample.shape[1:]
+        )
 
         if sample.shape[1] == 1:
             sample = sample.squeeze(1)
@@ -856,9 +881,9 @@ if __name__ == "__main__":
             "CrossAttnUpBlockSpatioTemporal",
             "CrossAttnUpBlockSpatioTemporal",
         ),
-        block_out_channels=(128, 256, 256, 256),
-        addition_time_embed_dim=128,  # 256,
-        projection_class_embeddings_input_dim=t * 128,  # 64,
+        block_out_channels=(256, 512, 512, 768),
+        addition_time_embed_dim=256,  # 256,
+        projection_class_embeddings_input_dim=t * 256,  # 64,
         layers_per_block=2,
         cross_attention_dim=c_dim,
         transformer_layers_per_block=1,

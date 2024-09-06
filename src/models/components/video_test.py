@@ -26,7 +26,9 @@ class Down(nn.Module):
 
     def __init__(self, in_channels, out_channels):
         super().__init__()
-        self.maxpool_conv = nn.Sequential(nn.MaxPool2d(2), DoubleConv(in_channels, out_channels))
+        self.maxpool_conv = nn.Sequential(
+            nn.MaxPool2d(2), DoubleConv(in_channels, out_channels)
+        )
 
     def forward(self, x):
         return self.maxpool_conv(x)
@@ -96,7 +98,9 @@ class SmallerVideoUNet(nn.Module):
         x = self.up3(x, x2)
         x = self.up4(x, x1)
         out = self.outc(x)
-        return out.view(x.size(0), self.output_length, self.n_channels, x.size(2), x.size(3))
+        return out.view(
+            x.size(0), self.output_length, self.n_channels, x.size(2), x.size(3)
+        )
 
 
 # Example usage:

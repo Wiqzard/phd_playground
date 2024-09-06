@@ -170,7 +170,9 @@ class UNetSpatioTemporalConditionModel(nn.Module):
 
         self.time_embedding = TimestepEmbedding(timestep_input_dim, time_embed_dim)
 
-        self.add_time_proj = Timesteps(addition_time_embed_dim, True, downscale_freq_shift=0)
+        self.add_time_proj = Timesteps(
+            addition_time_embed_dim, True, downscale_freq_shift=0
+        )
         self.add_embedding = TimestepEmbedding(
             projection_class_embeddings_input_dim, time_embed_dim
         )
@@ -188,7 +190,9 @@ class UNetSpatioTemporalConditionModel(nn.Module):
             layers_per_block = [layers_per_block] * len(down_block_types)
 
         if isinstance(transformer_layers_per_block, int):
-            transformer_layers_per_block = [transformer_layers_per_block] * len(down_block_types)
+            transformer_layers_per_block = [transformer_layers_per_block] * len(
+                down_block_types
+            )
 
         blocks_time_embed_dim = time_embed_dim
         self.temporal_downsamples = nn.ModuleList([])
@@ -239,7 +243,9 @@ class UNetSpatioTemporalConditionModel(nn.Module):
         reversed_num_attention_heads = list(reversed(num_attention_heads))
         reversed_layers_per_block = list(reversed(layers_per_block))
         reversed_cross_attention_dim = list(reversed(cross_attention_dim))
-        reversed_transformer_layers_per_block = list(reversed(transformer_layers_per_block))
+        reversed_transformer_layers_per_block = list(
+            reversed(transformer_layers_per_block)
+        )
 
         output_channel = reversed_block_out_channels[0]
         for i, up_block_type in enumerate(up_block_types):
@@ -247,7 +253,9 @@ class UNetSpatioTemporalConditionModel(nn.Module):
 
             prev_output_channel = output_channel
             output_channel = reversed_block_out_channels[i]
-            input_channel = reversed_block_out_channels[min(i + 1, len(block_out_channels) - 1)]
+            input_channel = reversed_block_out_channels[
+                min(i + 1, len(block_out_channels) - 1)
+            ]
 
             # add upsample block for all BUT final layer
             if not is_final_block:
@@ -351,7 +359,9 @@ class UNetSpatioTemporalConditionModel(nn.Module):
         # emb: [batch, channels] -> [batch * frames, channels]
         emb = emb.repeat_interleave(num_frames, dim=0)
         # encoder_hidden_states: [batch, 1, channels] -> [batch * frames, 1, channels]
-        encoder_hidden_states = encoder_hidden_states.repeat_interleave(num_frames, dim=0)
+        encoder_hidden_states = encoder_hidden_states.repeat_interleave(
+            num_frames, dim=0
+        )
 
         # 2. pre-process
         sample = self.conv_in(sample)
@@ -396,7 +406,9 @@ class UNetSpatioTemporalConditionModel(nn.Module):
         # 5. up
         for i, upsample_block in enumerate(self.up_blocks):
             res_samples = down_block_res_samples[-len(upsample_block.resnets) :]
-            down_block_res_samples = down_block_res_samples[: -len(upsample_block.resnets)]
+            down_block_res_samples = down_block_res_samples[
+                : -len(upsample_block.resnets)
+            ]
 
             if (
                 hasattr(upsample_block, "has_cross_attention")
@@ -428,7 +440,9 @@ class UNetSpatioTemporalConditionModel(nn.Module):
 
         ##
 
-        sample = sample.reshape(batch_size, sample.shape[1], num_frames, *sample.shape[2:])
+        sample = sample.reshape(
+            batch_size, sample.shape[1], num_frames, *sample.shape[2:]
+        )
         sample = self.final_out_conv(sample)
         sample = sample.reshape(
             batch_size * self.num_out_frames, sample.shape[1], *sample.shape[3:]
@@ -544,7 +558,9 @@ class VectorFieldRegressor(nn.Module):
 
         self.time_embedding = TimestepEmbedding(timestep_input_dim, time_embed_dim)
 
-        self.add_time_proj = Timesteps(addition_time_embed_dim, True, downscale_freq_shift=0)
+        self.add_time_proj = Timesteps(
+            addition_time_embed_dim, True, downscale_freq_shift=0
+        )
         self.add_embedding = TimestepEmbedding(
             projection_class_embeddings_input_dim, time_embed_dim
         )
@@ -562,7 +578,9 @@ class VectorFieldRegressor(nn.Module):
             layers_per_block = [layers_per_block] * len(down_block_types)
 
         if isinstance(transformer_layers_per_block, int):
-            transformer_layers_per_block = [transformer_layers_per_block] * len(down_block_types)
+            transformer_layers_per_block = [transformer_layers_per_block] * len(
+                down_block_types
+            )
 
         blocks_time_embed_dim = time_embed_dim
         # down
@@ -604,7 +622,9 @@ class VectorFieldRegressor(nn.Module):
         reversed_num_attention_heads = list(reversed(num_attention_heads))
         reversed_layers_per_block = list(reversed(layers_per_block))
         reversed_cross_attention_dim = list(reversed(cross_attention_dim))
-        reversed_transformer_layers_per_block = list(reversed(transformer_layers_per_block))
+        reversed_transformer_layers_per_block = list(
+            reversed(transformer_layers_per_block)
+        )
 
         output_channel = reversed_block_out_channels[0]
         for i, up_block_type in enumerate(up_block_types):
@@ -612,7 +632,9 @@ class VectorFieldRegressor(nn.Module):
 
             prev_output_channel = output_channel
             output_channel = reversed_block_out_channels[i]
-            input_channel = reversed_block_out_channels[min(i + 1, len(block_out_channels) - 1)]
+            input_channel = reversed_block_out_channels[
+                min(i + 1, len(block_out_channels) - 1)
+            ]
 
             # add upsample block for all BUT final layer
             if not is_final_block:
@@ -712,10 +734,12 @@ class VectorFieldRegressor(nn.Module):
         emb = emb.repeat_interleave(num_frames, dim=0)
         # encoder_hidden_states: [batch, 1, channels] -> [batch * frames, 1, channels]
         if skip_action:
-            encoder_hidden_states = torch.zeros(batch_size, 1, self.cross_attention_dim).to(
-                sample.device
-            )
-        encoder_hidden_states = encoder_hidden_states.repeat_interleave(num_frames, dim=0)
+            encoder_hidden_states = torch.zeros(
+                batch_size, 1, self.cross_attention_dim
+            ).to(sample.device)
+        encoder_hidden_states = encoder_hidden_states.repeat_interleave(
+            num_frames, dim=0
+        )
 
         # 2. pre-process
         sample = self.conv_in(sample)
@@ -758,7 +782,9 @@ class VectorFieldRegressor(nn.Module):
         # 5. up
         for i, upsample_block in enumerate(self.up_blocks):
             res_samples = down_block_res_samples[-len(upsample_block.resnets) :]
-            down_block_res_samples = down_block_res_samples[: -len(upsample_block.resnets)]
+            down_block_res_samples = down_block_res_samples[
+                : -len(upsample_block.resnets)
+            ]
 
             if (
                 hasattr(upsample_block, "has_cross_attention")
@@ -785,7 +811,9 @@ class VectorFieldRegressor(nn.Module):
         sample = self.conv_norm_out(sample)
         sample = self.conv_act(sample)
 
-        sample = sample.reshape(batch_size, sample.shape[1], num_frames, *sample.shape[2:])
+        sample = sample.reshape(
+            batch_size, sample.shape[1], num_frames, *sample.shape[2:]
+        )
         sample = self.final_out_conv(sample)
         sample = sample.reshape(
             batch_size * self.num_out_frames, sample.shape[1], *sample.shape[3:]

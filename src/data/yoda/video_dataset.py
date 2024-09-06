@@ -141,12 +141,16 @@ class VideoDataset(Dataset):
         with h5py.File(self.videos_ds.shard_paths[shard_idx], "r") as f:
             video_len = f["len"][str(idx_in_shard)][()]
             num_frames = (self.skip_frames + 1) * (self.frames_per_sample - 1) + 1
-            assert video_len >= num_frames, "The video is shorter than the desired sample size"
+            assert (
+                video_len >= num_frames
+            ), "The video is shorter than the desired sample size"
             if self.random_time:
                 time_idx = np.random.choice(video_len - num_frames)
             assert time_idx < video_len, "Time index out of video boundary"
 
-            for i in range(time_idx, min(time_idx + num_frames, video_len), self.skip_frames + 1):
+            for i in range(
+                time_idx, min(time_idx + num_frames, video_len), self.skip_frames + 1
+            ):
                 if "videos" in f:
                     img = f["videos"][str(idx_in_shard)][str(i)][()]
                 else:

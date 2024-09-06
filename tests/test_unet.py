@@ -278,7 +278,10 @@ def test_ddp_model():
     sample_inputs = (input, time_step, encoder_hidden_states, additional_time_ids)
 
     mp.spawn(
-        run_ddp_test, args=(world_size, model_class, sample_inputs), nprocs=world_size, join=True
+        run_ddp_test,
+        args=(world_size, model_class, sample_inputs),
+        nprocs=world_size,
+        join=True,
     )
 
 

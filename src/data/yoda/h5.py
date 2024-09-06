@@ -193,7 +193,9 @@ class HDF5Maker:
             self.out_dir,
             self.name_fmt.format(self.shard_number) if self.name is None else self.name,
         )
-        assert not os.path.exists(self.shard_p), f"Record already exists! {self.shard_p}"
+        assert not os.path.exists(
+            self.shard_p
+        ), f"Record already exists! {self.shard_p}"
         self.shard_paths.append(self.shard_p)
 
         # print(f"Creating shard # {self.shard_number}: {self.shard_p}...")
@@ -234,12 +236,16 @@ class HDF5Maker:
                     str(i), data=frame, dtype=flowtype, compression="lzf"
                 )
 
-    def add_data(self, data, flow=None, dtype=None, flowtype=None, return_curr_count=False):
+    def add_data(
+        self, data, flow=None, dtype=None, flowtype=None, return_curr_count=False
+    ):
         if self.video:
             self.add_video_data(data, flow, dtype, flowtype)
         else:
             # self.writer.create_dataset(str(self.count), data=data, compression="gzip", compression_opts=9)
-            self.writer.create_dataset(str(self.count), data=data, dtype=dtype, compression="lzf")
+            self.writer.create_dataset(
+                str(self.count), data=data, dtype=dtype, compression="lzf"
+            )
 
         curr_count = self.count
         self.count += 1
@@ -257,7 +263,9 @@ class HDF5Maker:
 
 if __name__ == "__main__":
     # Make
-    h5_maker = HDF5Maker("EXPERIMENTS/h5", num_per_shard=10, force=True, video=True, flow=True)
+    h5_maker = HDF5Maker(
+        "EXPERIMENTS/h5", num_per_shard=10, force=True, video=True, flow=True
+    )
 
     a = [torch.zeros(12, 255, 52, 52)] * 12
     b = [torch.zeros(12, 2, 52, 52)] * 12

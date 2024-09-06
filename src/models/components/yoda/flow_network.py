@@ -52,6 +52,8 @@ class FlowNetwork(nn.Module):
         resized_flows = F.interpolate(
             list_of_large_flows[-1] / self.scale, size=[height, width], mode="nearest"
         )
-        folded_flows = rearrange(resized_flows, "(b n) c h w -> b n c h w", n=num_observations - 1)
+        folded_flows = rearrange(
+            resized_flows, "(b n) c h w -> b n c h w", n=num_observations - 1
+        )
 
         return folded_flows

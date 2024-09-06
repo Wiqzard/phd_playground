@@ -98,7 +98,9 @@ class VideoAutoencoder(nn.Module):
         if self.type == "ours":
             reconstructed_observations = self.ae.backbone.decode_from_latents(latents)
         elif self.type == "svd":
-            reconstructed_observations = self.ae.decode(latents, num_frames=num_frames).sample
+            reconstructed_observations = self.ae.decode(
+                latents, num_frames=num_frames
+            ).sample
         else:
             reconstructed_observations = self.ae.decode(latents)
 
@@ -152,7 +154,9 @@ class VelocityNet(nn.Module):
                 is_ddp = True
                 break
         if is_ddp:
-            state = {k.replace("module.", ""): v for k, v in loaded_state["model"].items()}
+            state = {
+                k.replace("module.", ""): v for k, v in loaded_state["model"].items()
+            }
         else:
             state = {f"module.{k}": v for k, v in loaded_state["model"].items()}
 
@@ -168,7 +172,9 @@ class VelocityNet(nn.Module):
             state = model_state_dict
 
         dmodel = (
-            self.module if isinstance(self, torch.nn.parallel.DistributedDataParallel) else self
+            self.module
+            if isinstance(self, torch.nn.parallel.DistributedDataParallel)
+            else self
         )
         dmodel.load_state_dict(state)
         print(f"Loaded weights for keys: {state}")
@@ -203,7 +209,9 @@ class VelocityNet(nn.Module):
             flows = flows.reshape(-1, 2, *flows.shape[-2:])
 
         # Sparsify flows
-        sparsification_results = self.sparsification_network(flows, num_vectors=num_vectors)
+        sparsification_results = self.sparsification_network(
+            flows, num_vectors=num_vectors
+        )
         sparse_flows = sparsification_results[0]
 
         return sparse_flows
@@ -224,7 +232,8 @@ class VelocityNet(nn.Module):
             timestep=t.squeeze(),
             encoder_hidden_states=flow_states,
             added_time_ids=index_distances,
-            skip_action=torch.rand(1, device=input_latents.device).item() < self.skip_prob,
+            skip_action=torch.rand(1, device=input_latents.device).item()
+            < self.skip_prob,
         )
         return reconstructed_vectors
 
@@ -253,7 +262,8 @@ class VelocityNet(nn.Module):
         else:
             conditioning_frames_idx = (
                 torch.arange(
-                    X.shape[1] - num_ref_frames - self.num_cond_frames, X.shape[1] - num_ref_frames
+                    X.shape[1] - num_ref_frames - self.num_cond_frames,
+                    X.shape[1] - num_ref_frames,
                 )
                 .unsqueeze(0)
                 .repeat(X.shape[0], 1)
@@ -269,7 +279,11 @@ class VelocityNet(nn.Module):
         time_ids_reference = torch.arange(0, num_ref_frames + (not training)).flip(0)
 
         time_ids = torch.cat(
-            [time_ids_conditioning, time_ids_reference.unsqueeze(0).expand(X.shape[0], -1)], dim=1
+            [
+                time_ids_conditioning,
+                time_ids_reference.unsqueeze(0).expand(X.shape[0], -1),
+            ],
+            dim=1,
         ).to(X.device)
 
         frames = torch.cat([conditioning_frames, reference_frames], dim=1)
@@ -358,7 +372,9 @@ class VelocityNet(nn.Module):
             # cat with the initial reference latent y
             # calculate time_ids + flows
 
-            sample_latents, index_distances = self.get_input_frames(latents, training=False)
+            sample_latents, index_distances = self.get_input_frames(
+                latents, training=False
+            )
             sample_latents = torch.cat([sample_latents, y.unsqueeze(1)], dim=1)
 
             # Calculate vectors
@@ -385,7 +401,9 @@ class VelocityNet(nn.Module):
         next_latents = odeint(
             f,
             y0,
-            t=torch.linspace(warm_start, 1, int((1 - warm_start) * steps), device=y0.device),
+            t=torch.linspace(
+                warm_start, 1, int((1 - warm_start) * steps), device=y0.device
+            ),
             method="rk4",
         )[-1]
 

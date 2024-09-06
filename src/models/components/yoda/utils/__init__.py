@@ -101,7 +101,9 @@ class SinusoidalPositionalEmbedding(nn.Module):
     def __init__(self, embed_dim: int, max_seq_length: int = 32):
         super().__init__()
         position = torch.arange(max_seq_length).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, embed_dim, 2) * (-math.log(10000.0) / embed_dim))
+        div_term = torch.exp(
+            torch.arange(0, embed_dim, 2) * (-math.log(10000.0) / embed_dim)
+        )
         pe = torch.zeros(1, max_seq_length, embed_dim)
         pe[0, :, 0::2] = torch.sin(position * div_term)
         pe[0, :, 1::2] = torch.cos(position * div_term)
@@ -249,7 +251,9 @@ class Attention(nn.Module):
             self.group_norm = None
 
         if spatial_norm_dim is not None:
-            self.spatial_norm = SpatialNorm(f_channels=query_dim, zq_channels=spatial_norm_dim)
+            self.spatial_norm = SpatialNorm(
+                f_channels=query_dim, zq_channels=spatial_norm_dim
+            )
         else:
             self.spatial_norm = None
 
@@ -260,8 +264,12 @@ class Attention(nn.Module):
             self.norm_q = nn.LayerNorm(dim_head, eps=eps)
             self.norm_k = nn.LayerNorm(dim_head, eps=eps)
         elif qk_norm == "fp32_layer_norm":
-            self.norm_q = FP32LayerNorm(dim_head, elementwise_affine=False, bias=False, eps=eps)
-            self.norm_k = FP32LayerNorm(dim_head, elementwise_affine=False, bias=False, eps=eps)
+            self.norm_q = FP32LayerNorm(
+                dim_head, elementwise_affine=False, bias=False, eps=eps
+            )
+            self.norm_k = FP32LayerNorm(
+                dim_head, elementwise_affine=False, bias=False, eps=eps
+            )
         elif qk_norm == "layer_norm_across_heads":
             # Lumina applys qk norm across all heads
             self.norm_q = nn.LayerNorm(dim_head * heads, eps=eps)
@@ -270,7 +278,9 @@ class Attention(nn.Module):
             self.norm_q = RMSNorm(dim_head, eps=eps)
             self.norm_k = RMSNorm(dim_head, eps=eps)
         else:
-            raise ValueError(f"unknown qk_norm: {qk_norm}. Should be None or 'layer_norm'")
+            raise ValueError(
+                f"unknown qk_norm: {qk_norm}. Should be None or 'layer_norm'"
+            )
 
         if cross_attention_norm is None:
             self.norm_cross = None
@@ -302,16 +312,24 @@ class Attention(nn.Module):
 
         if not self.only_cross_attention:
             # only relevant for the `AddedKVProcessor` classes
-            self.to_k = nn.Linear(self.cross_attention_dim, self.inner_kv_dim, bias=bias)
-            self.to_v = nn.Linear(self.cross_attention_dim, self.inner_kv_dim, bias=bias)
+            self.to_k = nn.Linear(
+                self.cross_attention_dim, self.inner_kv_dim, bias=bias
+            )
+            self.to_v = nn.Linear(
+                self.cross_attention_dim, self.inner_kv_dim, bias=bias
+            )
         else:
             self.to_k = None
             self.to_v = None
 
         self.added_proj_bias = added_proj_bias
         if self.added_kv_proj_dim is not None:
-            self.add_k_proj = nn.Linear(added_kv_proj_dim, self.inner_kv_dim, bias=added_proj_bias)
-            self.add_v_proj = nn.Linear(added_kv_proj_dim, self.inner_kv_dim, bias=added_proj_bias)
+            self.add_k_proj = nn.Linear(
+                added_kv_proj_dim, self.inner_kv_dim, bias=added_proj_bias
+            )
+            self.add_v_proj = nn.Linear(
+                added_kv_proj_dim, self.inner_kv_dim, bias=added_proj_bias
+            )
             if self.context_pre_only is not None:
                 self.add_q_proj = nn.Linear(
                     added_kv_proj_dim, self.inner_dim, bias=added_proj_bias
@@ -440,7 +458,9 @@ class Attention(nn.Module):
         # here we simply pass along all tensors to the selected processor class
         # For standard processors that are defined here, `**cross_attention_kwargs` is empty
 
-        attn_parameters = set(inspect.signature(self.processor.__call__).parameters.keys())
+        attn_parameters = set(
+            inspect.signature(self.processor.__call__).parameters.keys()
+        )
         quiet_attn_parameters = {"ip_adapter_masks"}
         unused_kwargs = [
             k
@@ -497,11 +517,15 @@ class Attention(nn.Module):
             extra_dim = 1
         else:
             batch_size, extra_dim, seq_len, dim = tensor.shape
-        tensor = tensor.reshape(batch_size, seq_len * extra_dim, head_size, dim // head_size)
+        tensor = tensor.reshape(
+            batch_size, seq_len * extra_dim, head_size, dim // head_size
+        )
         tensor = tensor.permute(0, 2, 1, 3)
 
         if out_dim == 3:
-            tensor = tensor.reshape(batch_size * head_size, seq_len * extra_dim, dim // head_size)
+            tensor = tensor.reshape(
+                batch_size * head_size, seq_len * extra_dim, dim // head_size
+            )
 
         return tensor
 
@@ -616,7 +640,9 @@ class Attention(nn.Module):
 
         return attention_mask
 
-    def norm_encoder_hidden_states(self, encoder_hidden_states: torch.Tensor) -> torch.Tensor:
+    def norm_encoder_hidden_states(
+        self, encoder_hidden_states: torch.Tensor
+    ) -> torch.Tensor:
         r"""Normalize the encoder hidden states. Requires `self.norm_cross` to be specified when
         constructing the `Attention` class.
 
@@ -675,7 +701,9 @@ class Attention(nn.Module):
                 self.to_qkv.bias.copy_(concatenated_bias)
 
         else:
-            concatenated_weights = torch.cat([self.to_k.weight.data, self.to_v.weight.data])
+            concatenated_weights = torch.cat(
+                [self.to_k.weight.data, self.to_v.weight.data]
+            )
             in_features = concatenated_weights.shape[1]
             out_features = concatenated_weights.shape[0]
 
@@ -688,7 +716,9 @@ class Attention(nn.Module):
             )
             self.to_kv.weight.copy_(concatenated_weights)
             if self.use_bias:
-                concatenated_bias = torch.cat([self.to_k.bias.data, self.to_v.bias.data])
+                concatenated_bias = torch.cat(
+                    [self.to_k.bias.data, self.to_v.bias.data]
+                )
                 self.to_kv.bias.copy_(concatenated_bias)
 
         # handle added projections for SD3 and others.
@@ -850,7 +880,9 @@ class BasicTransformerBlock(nn.Module):
         self.use_ada_layer_norm_zero = (
             num_embeds_ada_norm is not None
         ) and norm_type == "ada_norm_zero"
-        self.use_ada_layer_norm = (num_embeds_ada_norm is not None) and norm_type == "ada_norm"
+        self.use_ada_layer_norm = (
+            num_embeds_ada_norm is not None
+        ) and norm_type == "ada_norm"
         self.use_ada_layer_norm_single = norm_type == "ada_norm_single"
         self.use_layer_norm = norm_type == "layer_norm"
         self.use_ada_layer_norm_continuous = norm_type == "ada_norm_continuous"
@@ -928,7 +960,9 @@ class BasicTransformerBlock(nn.Module):
 
             self.attn2 = Attention(
                 query_dim=dim,
-                cross_attention_dim=(cross_attention_dim if not double_self_attention else None),
+                cross_attention_dim=(
+                    cross_attention_dim if not double_self_attention else None
+                ),
                 heads=num_attention_heads,
                 dim_head=attention_head_dim,
                 dropout=dropout,
@@ -1017,7 +1051,9 @@ class BasicTransformerBlock(nn.Module):
         elif self.norm_type in ["layer_norm", "layer_norm_i2vgen"]:
             norm_hidden_states = self.norm1(hidden_states)
         elif self.norm_type == "ada_norm_continuous":
-            norm_hidden_states = self.norm1(hidden_states, added_cond_kwargs["pooled_text_emb"])
+            norm_hidden_states = self.norm1(
+                hidden_states, added_cond_kwargs["pooled_text_emb"]
+            )
         elif self.norm_type == "ada_norm_single":
             shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
                 self.scale_shift_table[None] + timestep.reshape(batch_size, 6, -1)
@@ -1038,7 +1074,9 @@ class BasicTransformerBlock(nn.Module):
 
         attn_output = self.attn1(
             norm_hidden_states,
-            encoder_hidden_states=(encoder_hidden_states if self.only_cross_attention else None),
+            encoder_hidden_states=(
+                encoder_hidden_states if self.only_cross_attention else None
+            ),
             attention_mask=attention_mask,
             **cross_attention_kwargs,
         )
@@ -1087,12 +1125,16 @@ class BasicTransformerBlock(nn.Module):
         # 4. Feed-forward
         # i2vgen doesn't have this norm 🤷‍♂️
         if self.norm_type == "ada_norm_continuous":
-            norm_hidden_states = self.norm3(hidden_states, added_cond_kwargs["pooled_text_emb"])
+            norm_hidden_states = self.norm3(
+                hidden_states, added_cond_kwargs["pooled_text_emb"]
+            )
         elif not self.norm_type == "ada_norm_single":
             norm_hidden_states = self.norm3(hidden_states)
 
         if self.norm_type == "ada_norm_zero":
-            norm_hidden_states = norm_hidden_states * (1 + scale_mlp[:, None]) + shift_mlp[:, None]
+            norm_hidden_states = (
+                norm_hidden_states * (1 + scale_mlp[:, None]) + shift_mlp[:, None]
+            )
 
         if self.norm_type == "ada_norm_single":
             norm_hidden_states = self.norm2(hidden_states)
@@ -1140,22 +1182,32 @@ class AttnProcessor:
 
         if input_ndim == 4:
             batch_size, channel, height, width = hidden_states.shape
-            hidden_states = hidden_states.view(batch_size, channel, height * width).transpose(1, 2)
+            hidden_states = hidden_states.view(
+                batch_size, channel, height * width
+            ).transpose(1, 2)
 
         batch_size, sequence_length, _ = (
-            hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
+            hidden_states.shape
+            if encoder_hidden_states is None
+            else encoder_hidden_states.shape
         )
-        attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
+        attention_mask = attn.prepare_attention_mask(
+            attention_mask, sequence_length, batch_size
+        )
 
         if attn.group_norm is not None:
-            hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
+            hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(
+                1, 2
+            )
 
         query = attn.to_q(hidden_states)
 
         if encoder_hidden_states is None:
             encoder_hidden_states = hidden_states
         elif attn.norm_cross:
-            encoder_hidden_states = attn.norm_encoder_hidden_states(encoder_hidden_states)
+            encoder_hidden_states = attn.norm_encoder_hidden_states(
+                encoder_hidden_states
+            )
 
         key = attn.to_k(encoder_hidden_states)
         value = attn.to_v(encoder_hidden_states)
@@ -1211,15 +1263,23 @@ class SlicedAttnProcessor:
 
         if input_ndim == 4:
             batch_size, channel, height, width = hidden_states.shape
-            hidden_states = hidden_states.view(batch_size, channel, height * width).transpose(1, 2)
+            hidden_states = hidden_states.view(
+                batch_size, channel, height * width
+            ).transpose(1, 2)
 
         batch_size, sequence_length, _ = (
-            hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
+            hidden_states.shape
+            if encoder_hidden_states is None
+            else encoder_hidden_states.shape
         )
-        attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
+        attention_mask = attn.prepare_attention_mask(
+            attention_mask, sequence_length, batch_size
+        )
 
         if attn.group_norm is not None:
-            hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
+            hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(
+                1, 2
+            )
 
         query = attn.to_q(hidden_states)
         dim = query.shape[-1]
@@ -1228,7 +1288,9 @@ class SlicedAttnProcessor:
         if encoder_hidden_states is None:
             encoder_hidden_states = hidden_states
         elif attn.norm_cross:
-            encoder_hidden_states = attn.norm_encoder_hidden_states(encoder_hidden_states)
+            encoder_hidden_states = attn.norm_encoder_hidden_states(
+                encoder_hidden_states
+            )
 
         key = attn.to_k(encoder_hidden_states)
         value = attn.to_v(encoder_hidden_states)
@@ -1249,10 +1311,14 @@ class SlicedAttnProcessor:
             query_slice = query[start_idx:end_idx]
             key_slice = key[start_idx:end_idx]
             attn_mask_slice = (
-                attention_mask[start_idx:end_idx] if attention_mask is not None else None
+                attention_mask[start_idx:end_idx]
+                if attention_mask is not None
+                else None
             )
 
-            attn_slice = attn.get_attention_scores(query_slice, key_slice, attn_mask_slice)
+            attn_slice = attn.get_attention_scores(
+                query_slice, key_slice, attn_mask_slice
+            )
 
             attn_slice = torch.bmm(attn_slice, value[start_idx:end_idx])
 
@@ -1310,12 +1376,16 @@ class SlicedAttnAddedKVProcessor:
 
         batch_size, sequence_length, _ = hidden_states.shape
 
-        attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
+        attention_mask = attn.prepare_attention_mask(
+            attention_mask, sequence_length, batch_size
+        )
 
         if encoder_hidden_states is None:
             encoder_hidden_states = hidden_states
         elif attn.norm_cross:
-            encoder_hidden_states = attn.norm_encoder_hidden_states(encoder_hidden_states)
+            encoder_hidden_states = attn.norm_encoder_hidden_states(
+                encoder_hidden_states
+            )
 
         hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
 
@@ -1326,8 +1396,12 @@ class SlicedAttnAddedKVProcessor:
         encoder_hidden_states_key_proj = attn.add_k_proj(encoder_hidden_states)
         encoder_hidden_states_value_proj = attn.add_v_proj(encoder_hidden_states)
 
-        encoder_hidden_states_key_proj = attn.head_to_batch_dim(encoder_hidden_states_key_proj)
-        encoder_hidden_states_value_proj = attn.head_to_batch_dim(encoder_hidden_states_value_proj)
+        encoder_hidden_states_key_proj = attn.head_to_batch_dim(
+            encoder_hidden_states_key_proj
+        )
+        encoder_hidden_states_value_proj = attn.head_to_batch_dim(
+            encoder_hidden_states_value_proj
+        )
 
         if not attn.only_cross_attention:
             key = attn.to_k(hidden_states)
@@ -1354,10 +1428,14 @@ class SlicedAttnAddedKVProcessor:
             query_slice = query[start_idx:end_idx]
             key_slice = key[start_idx:end_idx]
             attn_mask_slice = (
-                attention_mask[start_idx:end_idx] if attention_mask is not None else None
+                attention_mask[start_idx:end_idx]
+                if attention_mask is not None
+                else None
             )
 
-            attn_slice = attn.get_attention_scores(query_slice, key_slice, attn_mask_slice)
+            attn_slice = attn.get_attention_scores(
+                query_slice, key_slice, attn_mask_slice
+            )
 
             attn_slice = torch.bmm(attn_slice, value[start_idx:end_idx])
 
@@ -1404,10 +1482,14 @@ class AttnProcessor2_0:
 
         if input_ndim == 4:
             batch_size, channel, height, width = hidden_states.shape
-            hidden_states = hidden_states.view(batch_size, channel, height * width).transpose(1, 2)
+            hidden_states = hidden_states.view(
+                batch_size, channel, height * width
+            ).transpose(1, 2)
 
         batch_size, sequence_length, _ = (
-            hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
+            hidden_states.shape
+            if encoder_hidden_states is None
+            else encoder_hidden_states.shape
         )
 
         if attention_mask is not None:
@@ -1421,14 +1503,18 @@ class AttnProcessor2_0:
             )
 
         if attn.group_norm is not None:
-            hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
+            hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(
+                1, 2
+            )
 
         query = attn.to_q(hidden_states)
 
         if encoder_hidden_states is None:
             encoder_hidden_states = hidden_states
         elif attn.norm_cross:
-            encoder_hidden_states = attn.norm_encoder_hidden_states(encoder_hidden_states)
+            encoder_hidden_states = attn.norm_encoder_hidden_states(
+                encoder_hidden_states
+            )
 
         key = attn.to_k(encoder_hidden_states)
         value = attn.to_v(encoder_hidden_states)
@@ -1562,7 +1648,9 @@ class TemporalBasicTransformerBlock(nn.Module):
             batch_size, num_frames, seq_length, channels
         )
         hidden_states = hidden_states.permute(0, 2, 1, 3)
-        hidden_states = hidden_states.reshape(batch_size * seq_length, num_frames, channels)
+        hidden_states = hidden_states.reshape(
+            batch_size * seq_length, num_frames, channels
+        )
 
         residual = hidden_states
         hidden_states = self.norm_in(hidden_states)
@@ -1608,7 +1696,9 @@ class TemporalBasicTransformerBlock(nn.Module):
             batch_size, seq_length, num_frames, channels
         )
         hidden_states = hidden_states.permute(0, 2, 1, 3)
-        hidden_states = hidden_states.reshape(batch_size * num_frames, seq_length, channels)
+        hidden_states = hidden_states.reshape(
+            batch_size * num_frames, seq_length, channels
+        )
 
         return hidden_states
 
@@ -1657,7 +1747,9 @@ class TransformerSpatioTemporalModel(nn.Module):
 
         # 2. Define input layers
         self.in_channels = in_channels
-        self.norm = torch.nn.GroupNorm(num_groups=32, num_channels=in_channels, eps=1e-6)
+        self.norm = torch.nn.GroupNorm(
+            num_groups=32, num_channels=in_channels, eps=1e-6
+        )
         self.proj_in = nn.Linear(in_channels, inner_dim)
 
         # 3. Define transformers blocks
@@ -1688,7 +1780,9 @@ class TransformerSpatioTemporalModel(nn.Module):
         )
 
         time_embed_dim = in_channels * 4
-        self.time_pos_embed = TimestepEmbedding(in_channels, time_embed_dim, out_dim=in_channels)
+        self.time_pos_embed = TimestepEmbedding(
+            in_channels, time_embed_dim, out_dim=in_channels
+        )
         self.time_proj = Timesteps(in_channels, True, 0)
         self.time_mixer = AlphaBlender(alpha=0.5, merge_strategy="learned_with_images")
 
@@ -1902,7 +1996,9 @@ class Upsample2D(nn.Module):
         assert hidden_states.shape[1] == self.channels
 
         if self.norm is not None:
-            hidden_states = self.norm(hidden_states.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+            hidden_states = self.norm(hidden_states.permute(0, 2, 3, 1)).permute(
+                0, 3, 1, 2
+            )
 
         if self.use_conv_transpose:
             return self.conv(hidden_states)
@@ -1922,9 +2018,13 @@ class Upsample2D(nn.Module):
         # size and do not make use of `scale_factor=2`
         if self.interpolate:
             if output_size is None:
-                hidden_states = F.interpolate(hidden_states, scale_factor=2.0, mode="nearest")
+                hidden_states = F.interpolate(
+                    hidden_states, scale_factor=2.0, mode="nearest"
+                )
             else:
-                hidden_states = F.interpolate(hidden_states, size=output_size, mode="nearest")
+                hidden_states = F.interpolate(
+                    hidden_states, size=output_size, mode="nearest"
+                )
 
         # If the input is bfloat16, we cast back to bfloat16
         if dtype == torch.bfloat16:
@@ -2021,7 +2121,9 @@ class ResnetBlock2D(nn.Module):
             num_groups=groups, num_channels=in_channels, eps=eps, affine=True
         )
 
-        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
+        self.conv1 = nn.Conv2d(
+            in_channels, out_channels, kernel_size=3, stride=1, padding=1
+        )
 
         if temb_channels is not None:
             if self.time_embedding_norm == "default":
@@ -2029,7 +2131,9 @@ class ResnetBlock2D(nn.Module):
             elif self.time_embedding_norm == "scale_shift":
                 self.time_emb_proj = nn.Linear(temb_channels, 2 * out_channels)
             else:
-                raise ValueError(f"unknown time_embedding_norm : {self.time_embedding_norm} ")
+                raise ValueError(
+                    f"unknown time_embedding_norm : {self.time_embedding_norm} "
+                )
         else:
             self.time_emb_proj = None
 
@@ -2061,7 +2165,9 @@ class ResnetBlock2D(nn.Module):
             elif kernel == "sde_vp":
                 self.downsample = partial(F.avg_pool2d, kernel_size=2, stride=2)
             else:
-                self.downsample = Downsample2D(in_channels, use_conv=False, padding=1, name="op")
+                self.downsample = Downsample2D(
+                    in_channels, use_conv=False, padding=1, name="op"
+                )
 
         self.use_in_shortcut = (
             self.in_channels != conv_2d_out_channels
@@ -2204,7 +2310,9 @@ class TemporalDownSample(nn.Module):
 
         self.nonlinearity = get_activation("silu")
 
-        self.use_in_shortcut = self.in_channels != out_channels or num_in_frames != num_out_frames
+        self.use_in_shortcut = (
+            self.in_channels != out_channels or num_in_frames != num_out_frames
+        )
 
         self.conv_shortcut = None
         if self.use_in_shortcut:
@@ -2275,7 +2383,9 @@ class TemporalDownSample(nn.Module):
             temb = self.time_emb_proj(temb)[:, :, :, None, None]
             temb = temb.permute(0, 2, 1, 3, 4)
             hidden_states = hidden_states + temb
-            temb = temb_out[:, : self.num_out_frames].reshape(bs * self.num_out_frames, -1)
+            temb = temb_out[:, : self.num_out_frames].reshape(
+                bs * self.num_out_frames, -1
+            )
 
         hidden_states = self.norm2(hidden_states)
         hidden_states = self.nonlinearity(hidden_states)
@@ -2289,7 +2399,9 @@ class TemporalDownSample(nn.Module):
 
         if encoder_hidden_states is not None and self.downsample_context:
             _, n_token, context_dim = encoder_hidden_states.shape
-            encoder_hidden_states = encoder_hidden_states.reshape(bs, self.num_in_frames, -1)
+            encoder_hidden_states = encoder_hidden_states.reshape(
+                bs, self.num_in_frames, -1
+            )
             encoder_hidden_states = self.nonlinearity(encoder_hidden_states)
             encoder_hidden_states = self.context_downsample(encoder_hidden_states)
             encoder_hidden_states = encoder_hidden_states.reshape(
@@ -2300,7 +2412,9 @@ class TemporalDownSample(nn.Module):
             downscaled_residuals = []
             for residual in residuals:
                 bsf, cr, hr, wr = residual.shape
-                residual = residual.reshape(bs, self.num_in_frames, self.in_channels, hr, wr)
+                residual = residual.reshape(
+                    bs, self.num_in_frames, self.in_channels, hr, wr
+                )
                 residual = residual.permute(0, 2, 1, 3, 4)
 
                 residual = self.norm1(residual)
@@ -2308,7 +2422,9 @@ class TemporalDownSample(nn.Module):
                 residual = self.res_conv(residual)
 
                 residual = residual.permute(0, 2, 1, 3, 4)
-                residual = residual.reshape(bs * self.num_out_frames, self.out_channels, hr, wr)
+                residual = residual.reshape(
+                    bs * self.num_out_frames, self.out_channels, hr, wr
+                )
                 downscaled_residuals.append(residual)
 
         output_tensor = output_tensor.permute(0, 2, 1, 3, 4).reshape(
@@ -2381,7 +2497,9 @@ class TemporalResnetBlock(nn.Module):
 
         self.nonlinearity = get_activation("silu")
 
-        self.use_in_shortcut = self.in_channels != out_channels or num_in_frames != num_out_frames
+        self.use_in_shortcut = (
+            self.in_channels != out_channels or num_in_frames != num_out_frames
+        )
 
         self.conv_shortcut = None
         if self.use_in_shortcut:
@@ -2533,15 +2651,22 @@ class AlphaBlender(nn.Module):
     ):
         super().__init__()
         self.merge_strategy = merge_strategy
-        self.switch_spatial_to_temporal_mix = switch_spatial_to_temporal_mix  # For TemporalVAE
+        self.switch_spatial_to_temporal_mix = (
+            switch_spatial_to_temporal_mix  # For TemporalVAE
+        )
 
         if merge_strategy not in self.strategies:
             raise ValueError(f"merge_strategy needs to be in {self.strategies}")
 
         if self.merge_strategy == "fixed":
             self.register_buffer("mix_factor", torch.Tensor([alpha]))
-        elif self.merge_strategy == "learned" or self.merge_strategy == "learned_with_images":
-            self.register_parameter("mix_factor", torch.nn.Parameter(torch.Tensor([alpha])))
+        elif (
+            self.merge_strategy == "learned"
+            or self.merge_strategy == "learned_with_images"
+        ):
+            self.register_parameter(
+                "mix_factor", torch.nn.Parameter(torch.Tensor([alpha]))
+            )
         else:
             raise ValueError(f"Unknown merge strategy {self.merge_strategy}")
 
@@ -2571,7 +2696,9 @@ class AlphaBlender(nn.Module):
             elif ndims == 3:
                 alpha = alpha.reshape(-1)[:, None, None]
             else:
-                raise ValueError(f"Unexpected ndims {ndims}. Dimensions should be 3 or 5")
+                raise ValueError(
+                    f"Unexpected ndims {ndims}. Dimensions should be 3 or 5"
+                )
 
         else:
             raise NotImplementedError
@@ -2666,7 +2793,9 @@ class Downsample2D(nn.Module):
         assert hidden_states.shape[1] == self.channels
 
         if self.norm is not None:
-            hidden_states = self.norm(hidden_states.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+            hidden_states = self.norm(hidden_states.permute(0, 2, 3, 1)).permute(
+                0, 3, 1, 2
+            )
 
         if self.use_conv and self.padding == 0:
             pad = (0, 1, 0, 1)
@@ -2966,7 +3095,9 @@ class CrossAttnUpBlockSpatioTemporal(nn.Module):
             self.temporal_downsample = nn.ModuleList([])
 
             for i in range(len(in_frames)):
-                res_skip_channels = in_channels if (i == num_layers - 1) else out_channels
+                res_skip_channels = (
+                    in_channels if (i == num_layers - 1) else out_channels
+                )
                 self.temporal_downsample.append(
                     TemporalDownSample(
                         in_channels=res_skip_channels,
@@ -3212,7 +3343,9 @@ class UpBlockSpatioTemporal(nn.Module):
             else:
                 self.temporal_downsample = nn.ModuleList([])
                 for i in range(len(in_frames)):
-                    res_skip_channels = in_channels if (i == num_layers - 1) else out_channels
+                    res_skip_channels = (
+                        in_channels if (i == num_layers - 1) else out_channels
+                    )
                     self.temporal_downsample.append(
                         TemporalDownSample(
                             in_channels=res_skip_channels,
@@ -3248,7 +3381,9 @@ class UpBlockSpatioTemporal(nn.Module):
 
             if len(self.temporal_downsample) == 1:
                 if self.in_frames[i] != self.out_frames:
-                    res_hidden_states = self.temporal_downsample[0](res_hidden_states)[0]
+                    res_hidden_states = self.temporal_downsample[0](res_hidden_states)[
+                        0
+                    ]
             elif len(self.temporal_downsample) > 1:
                 res_hidden_states = self.temporal_downsample[i](res_hidden_states)[0]
 

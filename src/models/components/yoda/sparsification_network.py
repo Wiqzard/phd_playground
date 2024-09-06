@@ -37,7 +37,9 @@ class SparsificationNetwork(nn.Module):
         # Compute masks
         flat_masks = F.one_hot(indices, num_classes=height * width)  # [b, k, h * w]
         flat_masks = torch.max(flat_masks, dim=1).values  # [b, h * w]
-        masks = rearrange(flat_masks, "b (h w) -> b h w", h=height).unsqueeze(1)  # [b, 1, h, w]
+        masks = rearrange(flat_masks, "b (h w) -> b h w", h=height).unsqueeze(
+            1
+        )  # [b, 1, h, w]
         masks = masks.to(flows.dtype)
 
         # Calculate sparse features

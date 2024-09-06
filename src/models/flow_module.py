@@ -116,7 +116,9 @@ class YodaLitModule(LightningModule):
         with torch.no_grad():
             latents, time_ids = self.net.get_input_frames(X, training)
 
-        flows = self.net._get_flows(X, flows).unsqueeze(1)  # gets flow from -2 to -1 frame
+        flows = self.net._get_flows(X, flows).unsqueeze(
+            1
+        )  # gets flow from -2 to -1 frame
 
         context = [time_ids, flows]
 
@@ -176,7 +178,10 @@ class YodaLitModule(LightningModule):
 
     def video_eval_step(self, batch: Any, batch_idx: int, prefix: str):
         X, flows = self.unpack_batch(batch)
-        X, y = X[:, : -self.hparams.num_val_frames], X[:, -self.hparams.num_val_frames :]
+        X, y = (
+            X[:, : -self.hparams.num_val_frames],
+            X[:, -self.hparams.num_val_frames :],
+        )
 
         X, y = X[0, ...].unsqueeze(0), y[0, ...].unsqueeze(0)
 
@@ -235,7 +240,9 @@ class YodaLitModule(LightningModule):
                 path = ""
                 from pytorch_fid import fid_score
 
-                fid = fid_score.calculate_fid_given_paths(["images", path], 256, "cuda", 2048, 0)
+                fid = fid_score.calculate_fid_given_paths(
+                    ["images", path], 256, "cuda", 2048, 0
+                )
                 self.log(f"{prefix}/fid", fid)
 
         # ts, x, x0, x_rest = self.preprocess_epoch_end(outputs, prefix)

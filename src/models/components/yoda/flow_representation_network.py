@@ -113,7 +113,9 @@ class FlowRepresentationNetwork(nn.Module):
                     Rearrange("b c h w -> b c (h w)"),
                     nn.BatchNorm1d(256),
                     Rearrange("b c (h w) -> b c h w", h=out_res[0]),
-                    nn.Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1)),
+                    nn.Conv2d(
+                        256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1)
+                    ),
                     nn.GELU(),
                 )
             )
@@ -121,13 +123,18 @@ class FlowRepresentationNetwork(nn.Module):
             Rearrange("b c h w -> b c (h w)"),
             nn.BatchNorm1d(256),
             Rearrange("b c (h w) -> b c h w", h=out_res[0]),
-            nn.Conv2d(256, out_channels, kernel_size=(1, 1), stride=(1, 1), padding=(0, 0)),
+            nn.Conv2d(
+                256, out_channels, kernel_size=(1, 1), stride=(1, 1), padding=(0, 0)
+            ),
         )
-        self.pos = build_position_encoding(out_channels, position_embedding_name="learned")
+        self.pos = build_position_encoding(
+            out_channels, position_embedding_name="learned"
+        )
 
     def forward(self, flows: torch.Tensor) -> torch.Tensor:
         """Computes the state corresponding to each observation :param flows: (bs, 3, height,
-        width) tensor :return: (bs, state_features, state_height, state_width) tensor of states."""
+        width) tensor :return: (bs, state_features, state_height, state_width) tensor of states.
+        """
         # Tile flows
         x = self.tiling(flows)
         # Forward residual layers

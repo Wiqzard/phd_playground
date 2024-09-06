@@ -192,7 +192,9 @@ class FlowSolver(torch.nn.Module):
             return node(x0, t_span)
 
         aug_dims = self.augmentations.aug_dims
-        aug_net = AugmentedVectorField(self.forward_ode_drift, self.augmentations.regs, self.dim)
+        aug_net = AugmentedVectorField(
+            self.forward_ode_drift, self.augmentations.regs, self.dim
+        )
         node_partial = NeuralODE(
             aug_net,
             solver=self.ode_solver,
