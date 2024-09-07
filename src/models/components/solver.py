@@ -4,7 +4,7 @@ import torch
 import torchsde
 from torchdyn.core import NeuralODE
 
-from .augmentation import AugmentationModule, AugmentedVectorField, Sequential
+from .cfm.augmentation import AugmentationModule, AugmentedVectorField, Sequential
 
 
 class TorchSDE(torch.nn.Module):

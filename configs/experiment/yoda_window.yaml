@@ -12,6 +12,7 @@ train: True
 test: False #True
 seed: 1401
 ckpt_path: null #logs/train/runs/2024-08-25_13-23-05/checkpoints/last.ckpt  # null
+allow_tf32: True
 
 paths:
   data_dir: /var/tmp/yoda3

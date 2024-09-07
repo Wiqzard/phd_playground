@@ -220,7 +220,7 @@ class H5VideoDataModule(LightningDataModule):
             base_folder=path,
             width=self.hparams.width,
             height=self.hparams.height,
-            sample_frames=self.hparams.sample_frames,
+            sample_frames=self.hparams.frames_per_sample,
             skip_frames=self.hparams.skip_frames,
             max_steps=self.hparams.num_steps,
         )

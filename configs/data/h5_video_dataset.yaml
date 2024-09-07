@@ -1,7 +1,7 @@
 _target_: src.data.h5_video_datamodule.H5VideoDataModule
 data_path: ${paths.data_dir}
-width: 1024
-height: 576
+width: 510 #1024
+height: 320 #576
 skip_frames: 0
 frames_per_sample: 25
 num_steps: 10000

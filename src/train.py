@@ -55,6 +55,15 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     if cfg.get("seed"):
         L.seed_everything(cfg.seed, workers=True)
 
+    if cfg.get("enable_tf32"):
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        print(f"Enabling TF32 for PyTorch {torch.__version__}")
+    else:
+        print(f"Using default TF32 settings for PyTorch {torch.__version__}:")
+        print(f"torch.backends.cuda.matmul.allow_tf32={torch.backends.cuda.matmul.allow_tf32}")
+        print(f"torch.backends.cudnn.allow_tf32={torch.backends.cudnn.allow_tf32}")
+
     log.info(f"Instantiating datamodule <{cfg.data._target_}>")
     datamodule: LightningDataModule = hydra.utils.instantiate(cfg.data)
 

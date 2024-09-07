@@ -6,13 +6,12 @@ from typing import Any, Dict, List, Optional, Tuple
 import torch
 import wandb
 import numpy as np
-import pytorch_lightning as pl
-import torch
+from lightning import LightningModule
 import torch.utils.checkpoint
-from diffusers import (  # UNetSpatioTemporalConditionModel,
-    AutoencoderKLTemporalDecoder,
-    StableVideoDiffusionPipeline,
-)
+#from diffusers import (  # UNetSpatioTemporalConditionModel,
+#    AutoencoderKLTemporalDecoder,
+#    StableVideoDiffusionPipeline,
+#)
 from diffusers.optimization import get_scheduler
 from diffusers.training_utils import EMAModel
 from diffusers.utils import check_min_version, deprecate, is_wandb_available, load_image
@@ -23,53 +22,84 @@ from omegaconf import DictConfig, OmegaConf, open_dict
 from PIL import Image, ImageDraw
 from transformers import CLIPImageProcessor, CLIPVisionModelWithProjection
 
-from .utils import _resize_with_antialiasing, rand_log_normal
+from .components.utils import _resize_with_antialiasing, rand_log_normal
+from src.utils.torch_utils import default, repeat_as_img_seq, append_dims
 
 
-class SVDLightningModule(pl.LightningModule):
-    def __init__(self, autoencoder: Any, unet: Any, conditioner=None):
+from inspect import isfunction
+from einops import repeat
+
+
+
+#class EDMSampling:
+#    def __init__(self, p_mean=-1.2, p_std=1.2, num_frames=25):
+#        self.p_mean = p_mean
+#        self.p_std = p_std
+#        self.num_frames = num_frames
+#
+#    def __call__(self, n_samples, rand=None):
+#        bs = n_samples // self.num_frames
+#        rand_init = torch.randn((bs,))[..., None]
+#        rand_init = repeat(rand_init, "b 1 -> (b t)", t=self.num_frames)
+#        rand = default(rand, rand_init)
+#        log_sigma = self.p_mean + self.p_std * rand
+#        return log_sigma.exp()
+#
+#class Denoiser(nn.Module):
+#    def __init__(self, scaling_config: Dict, num_frames: int = 25):
+#        super().__init__()
+#        self.scaling: DenoiserScaling = instantiate_from_config(scaling_config)
+#        self.num_frames = num_frames
+#
+#    def possibly_quantize_sigma(self, sigma: torch.Tensor) -> torch.Tensor:
+#        return sigma
+#
+#    def possibly_quantize_c_noise(self, c_noise: torch.Tensor) -> torch.Tensor:
+#        return c_noise
+#
+#    def forward(
+#            self,
+#            network: nn.Module,
+#            noised_input: torch.Tensor,
+#            sigma: torch.Tensor,
+#            cond: Dict,
+#            cond_mask: torch.Tensor
+#    ):
+#        sigma = self.possibly_quantize_sigma(sigma)
+#        sigma_shape = sigma.shape
+#        sigma = append_dims(sigma, noised_input.ndim)
+#        c_skip, c_out, c_in, c_noise = self.scaling(sigma)
+#        c_noise = self.possibly_quantize_c_noise(c_noise.reshape(sigma_shape))
+#        return (network(noised_input * c_in, c_noise, cond, cond_mask, self.num_frames) * c_out + noised_input * c_skip)
+#
+#
+
+class SVDLightningModule(LightningModule):
+    def __init__(
+        self,
+        autoencoder: Any,
+        unet: Any,
+        conditioner: Any,
+        optimizer: Any,
+        scheduler: Any,
+        sigma_sampler: Any,
+        denoiser: Any,
+        num_frames: int = 25,
+        params_to_select: Optional[List[str]] = None,
+    ):
         super().__init__()  # autoencoder: Any,
 
-        # if cfg.non_ema_revision is None:
-        #    cfg.non_ema_revision = cfg.revision
+        self.save_hyperparameters(ignore=["autoencoder", "unet", "conditioner", "optimizer", "scheduler"])
 
-        ## Load img encoder, tokenizer and models.
-
-        # self.feature_extractor = CLIPImageProcessor.from_pretrained(
-        #    cfg.pretrained_model_name_or_path,
-        #    subfolder="feature_extractor",
-        #    revision=cfg.revision,
-        # )
-
-        # self.image_encoder = CLIPVisionModelWithProjection.from_pretrained(
-        #    cfg.pretrained_model_name_or_path,
-        #    subfolder="image_encoder",
-        #    revision=cfg.revision,
-        # )
         self.autoencoder = autoencoder
-
         self.unet = unet
+        self.conditioner = conditioner
+        self.optimizer = optimizer
+        self.scheduler = scheduler
+        self.sigma_sampler = sigma_sampler
+        self.denoiser = denoiser
         print(unet)
 
-        # self.vae = AutoencoderKLTemporalDecoder.from_pretrained(
-        #    cfg.pretrained_model_name_or_path,
-        #    subfolder="vae",
-        #    revision=cfg.revision,
-        #    variant="fp16",
-        # )
-        # self.unet = UNetSpatioTemporalConditionModel.from_pretrained(
-        #    (
-        #        cfg.pretrained_model_name_or_path
-        #        if cfg.pretrain_unet is None
-        #        else cfg.pretrain_unet
-        #    ),
-        #    subfolder="unet",
-        #    low_cpu_mem_usage=True,
-        #    variant="fp16",
-        #    condition_cfg=OmegaConf.to_container(cfg.conditions),
-        # )
-        ## self.cond_generator = ConditionGenerator(cfg.conditions)
-        ## self.cond_generator.requires_grad_(True)
 
         ## Freeze vae and image_encoder
         # self.vae.requires_grad_(False)
@@ -96,10 +126,9 @@ class SVDLightningModule(pl.LightningModule):
         ## self.vae.to(self.device_, dtype=self.weight_dtype)
         ## self.cond_generator.to(self.device_)
 
-        # if is_xformers_available():
-        #    self.unet.enable_xformers_memory_efficient_attention()
+        if is_xformers_available():
+            self.unet.enable_xformers_memory_efficient_attention()
 
-        ## self.generator = torch.Generator(device=self.device_).manual_seed(cfg.seed)
 
         # self.configure_optimizers()
 
@@ -150,86 +179,134 @@ class SVDLightningModule(pl.LightningModule):
         add_time_ids = add_time_ids.repeat(batch_size, 1)
         return add_time_ids
 
-    @staticmethod
-    def tensor_to_vae_latent(t, vae):
-        video_length = t.shape[1]
-
-        t = rearrange(t, "b f c h w -> (b f) c h w")
-        latents = vae.encode(t).latent_dist.sample()
-        latents = rearrange(latents, "(b f) c h w -> b f c h w", f=video_length)
-        latents = latents * vae.config.scaling_factor
-
-        return latents
 
     def configure_optimizers(self):
-        optimizer_cls = torch.optim.AdamW
-        if self.cfg.use_8bit_adam:
-            import bitsandbytes as bnb
-
-            optimizer_cls = bnb.optim.AdamW8bit
-
-        # parameters_list = list(self.cond_generator.parameters())
+        #parameters_list = list(self.cond_generator.parameters())
         parameters_list = []
-        if self.cfg.params_to_select == "all":
+        if (
+            self.hparams.params_to_select is None
+            or len(self.hparams.params_to_select) == 0
+        ):
             for param in self.unet.parameters():
                 parameters_list.append(param)
                 param.requires_grad = True
         else:
             for name, param in self.unet.named_parameters():
-                for to_select in self.cfg.params_to_select:
+                for to_select in self.hparams.params_to_select:
                     if to_select in name:
                         parameters_list.append(param)
                         param.requires_grad = True
                     else:
                         param.requires_grad = False
-
-        optimizer = optimizer_cls(
-            parameters_list,
-            lr=self.cfg.learning_rate,
-            betas=(self.cfg.adam_beta1, self.cfg.adam_beta2),
-            weight_decay=self.cfg.adam_weight_decay,
-            eps=self.cfg.adam_epsilon,
+    
+        optimizer = self.optimizer(
+            params=parameters_list,
+            #lr=self.cfg.learning_rate,
+            #betas=(self.cfg.adam_beta1, self.cfg.adam_beta2),
+            #eps=self.cfg.adam_epsilon,
         )
+        if self.scheduler is None:
+            return optimizer
+    
+        return [optimizer], [{"scheduler": self.scheduler, "interval": "epoch"}]
 
-        lr_scheduler = get_scheduler(
-            self.cfg.lr_scheduler,
-            optimizer=optimizer,
-            num_warmup_steps=self.cfg.lr_warmup_steps,
-            num_training_steps=self.cfg.max_train_steps,
-        )
+    
+    @torch.no_grad()
+    def encode_first_stage(self, x):
+        n_samples = default(self.en_and_decode_n_samples_a_time, x.shape[0])
+        n_rounds = math.ceil(x.shape[0] / n_samples)
+        all_out = list()
 
-        return [optimizer], [lr_scheduler]
+        video_length = x.shape[1]
+        x = rearrange(x, "b f c h w -> (b f) c h w")
 
-    def encode_image(self, pixel_values):
-        # pixel: [-1, 1]
-        pixel_values = _resize_with_antialiasing(pixel_values, (224, 224))
-        # We unnormalize it after resizing.
-        pixel_values = (pixel_values + 1.0) / 2.0
-        device = pixel_values.device
+        with torch.autocast("cuda", enabled=not self.disable_first_stage_autocast):
+            for n in range(n_rounds):
+                out = self.autoencoder.encode(
+                    x[n * n_samples: (n + 1) * n_samples]
+                )
+                all_out.append(out)
+        z = torch.cat(all_out, dim=0)
+        z = rearrange(z, "(b f) c h w -> b f c h w", f=video_length)
+        z = z * self.scale_factor
+        return z
 
-        # Normalize the image with for CLIP input
-        pixel_values = self.feature_extractor(
-            images=pixel_values,
-            do_normalize=True,
-            do_center_crop=False,
-            do_resize=False,
-            do_rescale=False,
-            return_tensors="pt",
-        ).pixel_values
+    def forward(self, x, batch):
+        loss = self.loss_fn(self.model, self.denoiser, self.conditioner, x, batch)  # go to StandardDiffusionLoss
+        loss_mean = loss.mean()
+        loss_dict = {"loss": loss_mean}
+        return loss_mean, loss_dict
 
-        pixel_values = pixel_values.to(device, dtype=self.weight_dtype)
-        image_embeddings = self.image_encoder(pixel_values).image_embeds
-        return image_embeddings
+    def shared_step(self, batch: Dict) -> Any:
+        x = self.get_input(batch)
+        x = self.encode_first_stage(x)
+        batch["global_step"] = self.global_step
+        loss, loss_dict = self(x, batch)
+        return loss, loss_dict
 
-    def forward(
-        self, inp_noisy_latents, timesteps, encoder_hidden_states, added_time_ids
-    ):
-        return self.unet(
-            inp_noisy_latents,
+    def training_step(self, batch, batch_idx):
+        loss, loss_dict = self.shared_step(batch)
+
+        self.log_dict(loss_dict, prog_bar=True, logger=True, on_step=True, on_epoch=True)
+
+        self.log("global_step", self.global_step, prog_bar=True, logger=True, on_step=True, on_epoch=False)
+
+        if self.scheduler_config is not None:
+            lr = self.optimizers().param_groups[0]["lr"]
+            self.log("lr_abs", lr, prog_bar=True, logger=True, on_step=True, on_epoch=False)
+        return loss
+
+    def get_noised_input(self, input: torch.Tensor) -> Tuple[torch.Tensor]:
+        sigmas = self.sigma_sampler(input.shape[0]).to(input)
+        cond_mask = torch.zeros_like(sigmas)
+        noise = torch.randn_like(input)
+        if self.offset_noise_level > 0.0:  # the entire channel is shifted together
+            offset_shape = (input.shape[0], input.shape[1])
+            # offset_shape = (input.shape[0] // self.num_frames, 1, input.shape[1])
+            rand_init = torch.randn(offset_shape, device=input.device)
+            # rand_init = repeat(rand_init, "b 1 c -> (b t) c", t=self.num_frames)
+            noise = noise + self.offset_noise_level * append_dims(rand_init, input.ndim)
+        #if self.replace_cond_frames:
+        #    sigmas_bc = append_dims((1 - cond_mask) * sigmas, input.ndim)
+        #else:
+        sigmas_bc = append_dims(sigmas, input.ndim)
+
+        noised_input = input + noise * sigmas_bc
+        sigma_shape = sigma.shape
+        sigma = append_dims(sigma, noised_input.ndim)
+
+        c_skip = self.sigma_data ** 2 / (sigma ** 2 + self.sigma_data ** 2)
+        c_out = sigma * self.sigma_data / (sigma ** 2 + self.sigma_data ** 2) ** 0.5
+        c_in = 1 / (sigma ** 2 + self.sigma_data ** 2) ** 0.5
+        c_noise = 0.25 * sigma.log()
+        
+
+        time_steps = c_noise
+        return None , time_steps
+    
+
+
+
+
+
+#
+
+        model_output = self(
+            noised_input,
             timesteps,
             encoder_hidden_states,
             added_time_ids=added_time_ids,
-        ).sample
+        )
+
+        if self.replace_cond_frames:  # ignore mask predictions
+            predict = model_output * append_dims(
+                1 - cond_mask, input.ndim
+            ) + input * append_dims(cond_mask, input.ndim)
+        else:
+            predict = model_output
+
+    def criterion(self, predict, target):
+        return torch.mean(((predict - target) ** 2).reshape(target.shape[0], -1), 1)
 
     def training_step(self, batch, batch_idx):
         pixel_values = (
@@ -238,8 +315,11 @@ class SVDLightningModule(pl.LightningModule):
         )
         batch_size = pixel_values.shape[0]
 
+        # sample conditioning
         ######### conditioning code start
-        encoder_hidden_states = self.encode_image(pixel_values[:, 0, :, :, :])
+
+        # encoder_hidden_states = self.encode_image(pixel_values[:, 0, :, :, :])
+        encoder_hidden_states = self.conditioner(pixel_values[:, 0, :, :, :])
         # cond_feats, pixel_values = self.cond_generator(
         #    pixel_values,
         #    self.generator,
@@ -477,66 +557,6 @@ class SVDLightningModule(pl.LightningModule):
             # Clean up to free memory
             del pipeline
             torch.cuda.empty_cache()
-
-    # def validation_step(self):
-    #    if self.cfg.use_ema and self.ema_unet is not None:
-    #        # Store the UNet parameters temporarily and load the EMA parameters to perform inference.
-    #        self.ema_unet.store(self.unet.parameters())
-    #        self.ema_unet.copy_to(self.unet.parameters())
-
-    #    # Unwrap models for compatibility in distributed training mode.
-    #    pipeline = StableVideoDiffusionPipeline.from_pretrained(
-    #        self.cfg.pretrained_model_name_or_path,
-    #        unet=self.unet,
-    #        image_encoder=self.image_encoder,
-    #        vae=self.vae,
-    #        revision=self.cfg.revision,
-    #        torch_dtype=self.cfg.weight_dtype,
-    #        cond_generator=self.cond_generator,
-    #    )
-    #    pipeline = pipeline.to(self.device_)
-    #    pipeline.set_progress_bar_config(disable=True)
-
-    #    val_save_dir = os.path.join(self.cfg.output_dir, "validation_images")
-    #    os.makedirs(val_save_dir, exist_ok=True)
-
-    #    with torch.autocast(
-    #        str(self.device_).replace(":0", ""),
-    #        enabled=self.cfg.accelerator.mixed_precision == "fp16",
-    #    ):
-    #        for val_img_idx in range(self.cfg.num_validation_images):
-    #            num_frames = self.cfg.num_frames
-    #            val_path = random.choice(self.all_val_paths)
-    #            video_frames = pipeline(
-    #                load_image(val_path).resize((self.cfg.width, self.cfg.height)),
-    #                height=self.cfg.height,
-    #                width=self.cfg.width,
-    #                num_frames=num_frames,
-    #                decode_chunk_size=8,
-    #                motion_bucket_id=127,
-    #                fps=7,
-    #                noise_aug_strength=0.02,
-    #                # generator=generator,
-    #            ).frames[0]
-
-    #            for i in range(num_frames):
-    #                img = video_frames[i]
-    #                video_frames[i] = np.array(img)
-
-    #            video_frames = np.asarray(video_frames)  # (time, h, w, c)
-    #            video_frames = video_frames.transpose(0, 3, 1, 2)  # (time, c, h, w)
-
-    #            self.log(
-    #                "val_img", wandb.Video(video_frames, fps=7), step=self.global_step
-    #            )
-
-    #    if self.cfg.use_ema and self.ema_unet is not None:
-    #        # Switch back to the original UNet parameters.
-    #        self.ema_unet.restore(self.unet.parameters())
-
-    #    # Clean up to free memory
-    #    del pipeline
-    #    torch.cuda.empty_cache()
 
     def train_dataloader(self):
         train_dataset = self.train_dataset

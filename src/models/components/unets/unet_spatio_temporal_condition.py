@@ -15,7 +15,7 @@ from diffusers.models.attention_processor import (
 from diffusers.models.embeddings import TimestepEmbedding, Timesteps
 from diffusers.models.modeling_utils import ModelMixin
 from diffusers.models.unets.unet_3d_blocks import get_down_block, get_up_block
-from .svd.mid_block_spatio_temporal import UNetMidBlockSpatioTemporal
+from .mid_block_spatio_temporal import UNetMidBlockSpatioTemporal
 from omegaconf import DictConfig
 import hydra
 

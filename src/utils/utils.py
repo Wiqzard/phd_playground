@@ -1,6 +1,8 @@
 import warnings
 from importlib.util import find_spec
 from typing import Any, Callable, Dict, Optional, Tuple
+import functools
+import importlib
 
 from omegaconf import DictConfig
 
@@ -119,3 +121,20 @@ def get_metric_value(
     log.info(f"Retrieved metric value! <{metric_name}={metric_value}>")
 
     return metric_value
+
+
+def partialclass(cls, *args, **kwargs):
+    class NewCls(cls):
+        __init__ = functools.partialmethod(cls.__init__, *args, **kwargs)
+
+    return NewCls
+
+
+def get_obj_from_str(string, reload=False, invalidate_cache=True):
+    module, cls = string.rsplit(".", 1)
+    if invalidate_cache:
+        importlib.invalidate_caches()
+    if reload:
+        module_imp = importlib.import_module(module)
+        importlib.reload(module_imp)
+    return getattr(importlib.import_module(module, package=None), cls)

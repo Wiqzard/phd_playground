@@ -7,7 +7,7 @@ from lightning import LightningModule
 
 from utils.logging_utils import get_wandb_logger, plot_samples
 
-from .components.augmentation import AugmentationModule, AugmentedVectorField
+from .components.cfm.augmentation import AugmentationModule, AugmentedVectorField
 from .components.helpers import to_video
 from .components.optimal_transport import OTPlanSampler
 from .components.solver import FlowSolver

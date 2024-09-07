@@ -1,28 +1,80 @@
 _target_: src.models.diffusion_module.SVDLightningModule
+params_to_select: null  # [temporal] null means all
+num_frames: &num_frames 25
+
+optimizer:
+  _target_: torch.optim.AdamW
+  _partial_: true
+  lr: 0.0001 
+  weight_decay: 1e-5
+
+scheduler:
+  _target_: torch.optim.lr_scheduler.StepLR
+  _partial_: true
+  step_size: 1
+  gamma: 1
+
 
 autoencoder: 
-  _target_: src.models.components.svd.autoencoder.AutoencoderKLTemporalDecoderWrapper
-  pretrained: False   # if pretrained True, ignore the architecture below
-  pretrained_model_name_or_path: stabilityai/stable-video-diffusion-img2vid
-  subfolder: vae 
-  variant: fp16 # link to precision
-  block_out_channels: [32, 64, 128, 128]
-  down_block_types: [
-      "DownEncoderBlock2D",
-      "DownEncoderBlock2D",
-      "DownEncoderBlock2D",
-      "DownEncoderBlock2D",
-  ]
-  force_upcast: True
-  in_channels: 3
-  latent_channels: 4
-  layers_per_block: 2
-  out_channels: 3
-  sample_size: 768
-  scaling_factor: 0.18215
+  _target_: src.models.autoencoding_module.AutoencodingEngine
+  loss:
+    _target_: torch.nn.Identity
+
+  regularizer:
+    _target_: src.models.components.autoencoder.regularizers.DiagonalGaussianRegularizer
+
+  encoder:
+    _target_: src.models.components.autoencoder.coder.Encoder
+    attn_type: vanilla
+    double_z: True
+    z_channels: 4
+    resolution: 256
+    in_channels: 3
+    out_ch: 3
+    ch: 128
+    ch_mult: [ 1, 2, 4, 4 ]
+    num_res_blocks: 2
+    attn_resolutions: [ ]
+    dropout: 0.0
+
+  decoder:
+    _target_: src.models.components.autoencoder.temporal_ae.VideoDecoder
+    attn_type: vanilla
+    double_z: True
+    z_channels: 4
+    resolution: 256
+    in_channels: 3
+    out_ch: 3
+    ch: 128
+    ch_mult: [ 1, 2, 4, 4 ]
+    num_res_blocks: 2
+    attn_resolutions: [ ]
+    dropout: 0.0
+    video_kernel_size: [ 3, 1, 1 ]
+
+
+#  _target_: src.models.components.svd.autoencoder.AutoencoderKLTemporalDecoderWrapper
+#  pretrained: False   # if pretrained True, ignore the architecture below
+#  pretrained_model_name_or_path: stabilityai/stable-video-diffusion-img2vid
+#  subfolder: vae 
+#  variant: fp16 # link to precision
+#  block_out_channels: [32, 64, 128, 128]
+#  down_block_types: [
+#      "DownEncoderBlock2D",
+#      "DownEncoderBlock2D",
+#      "DownEncoderBlock2D",
+#      "DownEncoderBlock2D",
+#  ]
+#  force_upcast: True
+#  in_channels: 3
+#  latent_channels: 4
+#  layers_per_block: 2
+#  out_channels: 3
+#  sample_size: 768
+#  scaling_factor: 0.18215
 
 unet:
-  _target_: src.models.components.svd.unet_condition.UNetSpatioTemporalConditionModelWrapper
+  _target_: src.models.components.unet.unet_hf.UNetSpatioTemporalConditionModelWrapper
   pretrained: False  # if pretrained True, ignore the architecture below
   pretrained_model_name_or_path: stabilityai/stable-video-diffusion-img2vid
   subfolder: unet
@@ -51,39 +103,40 @@ unet:
       "CrossAttnUpBlockSpatioTemporal",
   ]
 
+conditioner:
+  _target_: src.models.components.conditioner.condition_generator.ConditionGenerator
+  dino_provider:
+    _target_: src.models.components.conditioner.dino_features_provider.DINOFeaturesProvider
+    dino_version: dinov2_vits14
+    dino_channels: 384
+    proj_channels: 256
+    image_width: ${data.width}
+    image_height: ${data.height}
+    image_dropout_prob: 0.5
+    image_token_dropout_prob: 0.4
+    no_condition_prob: 0.15
+    token_dropout_prob: 0.2
+    num_condition_tokens: 128
+    condition_frames: [0, 3, 7 ,11]
+    num_dino_layers: 1
+    cage_crop:
+      min_w: 0.6
+      min_h: 0.3
+      max_w: 0.8
+      max_h: 0.5
+      y_limit: 0.0
 
-#model:
-#  _target_: src.models.components.UNetSpatioTemporalConditionModel 
-#   addition_time_embed_dim: 256
-#  block_out_channels: [
-#    320,
-#    640,
-#    1280,
-#    1280
-#  ]
-#  cross_attention_dim: 1024
-#  down_block_types: [
-#    "CrossAttnDownBlockSpatioTemporal",
-#    "CrossAttnDownBlockSpatioTemporal",
-#    "CrossAttnDownBlockSpatioTemporal",
-#    "DownBlockSpatioTemporal"
-#  ]
-#  in_channels: 8
-#  layers_per_block: 2
-#  num_attention_heads: [
-#    5,
-#    10,
-#    20,
-#    20
-#  ]
-#  num_frames: 25
-#  out_channels: 4
-#  projection_class_embeddings_input_dim: 768
-#  sample_size: 96
-#  transformer_layers_per_block: 1
-#  up_block_types: [
-#    "UpBlockSpatioTemporal",
-#    "CrossAttnUpBlockSpatioTemporal",
-#    "CrossAttnUpBlockSpatioTemporal",
-#    "CrossAttnUpBlockSpatioTemporal"
-#  ]
+  flow_provider: null
+    # _target_: src....
+  clip_provider:
+    _target_: src.models.components.conditioner.clip_features_provider.CLIPFeaturesProvider
+    pretrained_model_name_or_path:  stabilityai/stable-video-diffusion-img2vid
+
+
+sigma_sampler:
+  _target_: src.models.diffusion_module.EDMSampling
+  p_mean: 1.0
+  p_std: 1.6
+  num_frames: *num_frames
+
+

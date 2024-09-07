@@ -32,11 +32,20 @@ dependencies:
   - pytest=7.*
 
   # --------- loggers --------- #
-  # - wandb
+   - wandb
   # - neptune-client
   # - mlflow
   # - comet-ml
   # - aim>=3.16.2 # no lower than 3.16.2, see https://github.com/aimhubio/aim/issues/2550
+  
+  - xformers
+  - deepspeed
+  - huggingface_hub
+  - transformers
+  - diffusers
+  - accelerate
+  - h5py
+
 
   - pip>=23
   - pip:
