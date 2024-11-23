@@ -1,8 +1,8 @@
 # @package _global_
 
 defaults:
-  - override /data: h5_video_dataset 
-  - override /model: svd 
+  - override /data: h5_video_dataset
+  - override /model: svd
   - override /callbacks: default
   - override /trainer: ddp
   - override /paths: default
@@ -32,4 +32,3 @@ callbacks:
     filename: "epoch_{epoch:03d}"
   model_summary:
     max_depth: 0
-

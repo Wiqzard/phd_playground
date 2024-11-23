@@ -1,12 +1,12 @@
 from abc import abstractmethod
 from typing import Any, Tuple
 
+import numpy as np
 import torch
 from torch import nn
-import numpy as np
 
 
-class DiagonalGaussianDistribution(object):
+class DiagonalGaussianDistribution:
     def __init__(self, parameters, deterministic=False):
         self.parameters = parameters
         self.mean, self.logvar = torch.chunk(parameters, 2, dim=1)
@@ -27,14 +27,16 @@ class DiagonalGaussianDistribution(object):
         else:
             if other is None:
                 return 0.5 * torch.sum(
-                    torch.pow(self.mean, 2) + self.var - 1.0 - self.logvar,
-                    dim=[1, 2, 3]
+                    torch.pow(self.mean, 2) + self.var - 1.0 - self.logvar, dim=[1, 2, 3]
                 )
             else:
                 return 0.5 * torch.sum(
-                    torch.pow(self.mean - other.mean,
-                              2) / other.var + self.var / other.var - 1.0 - self.logvar + other.logvar,
-                    dim=[1, 2, 3]
+                    torch.pow(self.mean - other.mean, 2) / other.var
+                    + self.var / other.var
+                    - 1.0
+                    - self.logvar
+                    + other.logvar,
+                    dim=[1, 2, 3],
                 )
 
     def nll(self, sample, dims=[1, 2, 3]):
@@ -43,7 +45,7 @@ class DiagonalGaussianDistribution(object):
         else:
             return 0.5 * torch.sum(
                 np.log(2.0 * np.pi) + self.logvar + torch.pow(sample - self.mean, 2) / self.var,
-                dim=dims
+                dim=dims,
             )
 
     def mode(self):

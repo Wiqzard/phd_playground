@@ -5,23 +5,23 @@ import torch.nn as nn
 
 class Decoder(nn.Module):
     def __init__(
-            self,
-            *,
-            ch,
-            out_ch,
-            ch_mult=(1, 2, 4, 8),
-            num_res_blocks,
-            attn_resolutions,
-            dropout=0.0,
-            resamp_with_conv=True,
-            in_channels,
-            resolution,
-            z_channels,
-            give_pre_end=False,
-            tanh_out=False,
-            use_linear_attn=False,
-            attn_type="vanilla",
-            **ignorekwargs
+        self,
+        *,
+        ch,
+        out_ch,
+        ch_mult=(1, 2, 4, 8),
+        num_res_blocks,
+        attn_resolutions,
+        dropout=0.0,
+        resamp_with_conv=True,
+        in_channels,
+        resolution,
+        z_channels,
+        give_pre_end=False,
+        tanh_out=False,
+        use_linear_attn=False,
+        attn_type="vanilla",
+        **ignorekwargs,
     ):
         super().__init__()
         if use_linear_attn:
@@ -55,14 +55,14 @@ class Decoder(nn.Module):
             in_channels=block_in,
             out_channels=block_in,
             temb_channels=self.temb_ch,
-            dropout=dropout
+            dropout=dropout,
         )
         self.mid.attn_1 = make_attn_cls(block_in, attn_type=attn_type)
         self.mid.block_2 = make_resblock_cls(
             in_channels=block_in,
             out_channels=block_in,
             temb_channels=self.temb_ch,
-            dropout=dropout
+            dropout=dropout,
         )
 
         # upsampling
@@ -77,7 +77,7 @@ class Decoder(nn.Module):
                         in_channels=block_in,
                         out_channels=block_out,
                         temb_channels=self.temb_ch,
-                        dropout=dropout
+                        dropout=dropout,
                     )
                 )
                 block_in = block_out

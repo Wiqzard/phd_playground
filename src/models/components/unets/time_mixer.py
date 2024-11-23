@@ -1,22 +1,19 @@
 import torch
-from torch import nn
 from einops import rearrange
+from torch import nn
 
 
 class AlphaBlender(nn.Module):
     strategies = ["learned", "fixed", "learned_with_images"]
 
-    def __init__(
-            self,
-            alpha: float,
-            merge_strategy: str,
-            rearrange_pattern: str
-    ):
+    def __init__(self, alpha: float, merge_strategy: str, rearrange_pattern: str):
         super().__init__()
         self.merge_strategy = merge_strategy
         self.rearrange_pattern = rearrange_pattern
 
-        assert merge_strategy in self.strategies, f"merge_strategy needs to be in {self.strategies}"
+        assert (
+            merge_strategy in self.strategies
+        ), f"merge_strategy needs to be in {self.strategies}"
 
         if self.merge_strategy == "fixed":
             self.register_buffer("mix_factor", torch.Tensor([alpha]))
@@ -37,11 +34,7 @@ class AlphaBlender(nn.Module):
             raise NotImplementedError
         return alpha
 
-    def forward(
-            self,
-            x_spatial: torch.Tensor,
-            x_temporal: torch.Tensor
-    ) -> torch.Tensor:
+    def forward(self, x_spatial: torch.Tensor, x_temporal: torch.Tensor) -> torch.Tensor:
         alpha = self.get_alpha()
         x = alpha.to(x_spatial.dtype) * x_spatial + (1.0 - alpha).to(x_spatial.dtype) * x_temporal
         return x

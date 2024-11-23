@@ -1,37 +1,34 @@
 import math
 import os
 import random
+from inspect import isfunction
 from typing import Any, Dict, List, Optional, Tuple
 
-import torch
-import wandb
 import numpy as np
-from lightning import LightningModule
+import torch
 import torch.utils.checkpoint
-#from diffusers import (  # UNetSpatioTemporalConditionModel,
+import wandb
+
+# from diffusers import (  # UNetSpatioTemporalConditionModel,
 #    AutoencoderKLTemporalDecoder,
 #    StableVideoDiffusionPipeline,
-#)
+# )
 from diffusers.optimization import get_scheduler
 from diffusers.training_utils import EMAModel
 from diffusers.utils import check_min_version, deprecate, is_wandb_available, load_image
 from diffusers.utils.import_utils import is_xformers_available
-from einops import rearrange
+from einops import rearrange, repeat
 from huggingface_hub import create_repo, upload_folder
+from lightning import LightningModule
 from omegaconf import DictConfig, OmegaConf, open_dict
 from PIL import Image, ImageDraw
 from transformers import CLIPImageProcessor, CLIPVisionModelWithProjection
 
+from src.utils.torch_utils import append_dims, default, repeat_as_img_seq
+
 from .components.utils import _resize_with_antialiasing, rand_log_normal
-from src.utils.torch_utils import default, repeat_as_img_seq, append_dims
 
-
-from inspect import isfunction
-from einops import repeat
-
-
-
-#class EDMSampling:
+# class EDMSampling:
 #    def __init__(self, p_mean=-1.2, p_std=1.2, num_frames=25):
 #        self.p_mean = p_mean
 #        self.p_std = p_std
@@ -45,7 +42,7 @@ from einops import repeat
 #        log_sigma = self.p_mean + self.p_std * rand
 #        return log_sigma.exp()
 #
-#class Denoiser(nn.Module):
+# class Denoiser(nn.Module):
 #    def __init__(self, scaling_config: Dict, num_frames: int = 25):
 #        super().__init__()
 #        self.scaling: DenoiserScaling = instantiate_from_config(scaling_config)
@@ -74,6 +71,7 @@ from einops import repeat
 #
 #
 
+
 class SVDLightningModule(LightningModule):
     def __init__(
         self,
@@ -89,7 +87,9 @@ class SVDLightningModule(LightningModule):
     ):
         super().__init__()  # autoencoder: Any,
 
-        self.save_hyperparameters(ignore=["autoencoder", "unet", "conditioner", "optimizer", "scheduler"])
+        self.save_hyperparameters(
+            ignore=["autoencoder", "unet", "conditioner", "optimizer", "scheduler"]
+        )
 
         self.autoencoder = autoencoder
         self.unet = unet
@@ -99,7 +99,6 @@ class SVDLightningModule(LightningModule):
         self.sigma_sampler = sigma_sampler
         self.denoiser = denoiser
         print(unet)
-
 
         ## Freeze vae and image_encoder
         # self.vae.requires_grad_(False)
@@ -128,7 +127,6 @@ class SVDLightningModule(LightningModule):
 
         if is_xformers_available():
             self.unet.enable_xformers_memory_efficient_attention()
-
 
         # self.configure_optimizers()
 
@@ -165,9 +163,7 @@ class SVDLightningModule(LightningModule):
     ):
         add_time_ids = [fps, motion_bucket_id, noise_aug_strength]
 
-        passed_add_embed_dim = self.unet.config.addition_time_embed_dim * len(
-            add_time_ids
-        )
+        passed_add_embed_dim = self.unet.config.addition_time_embed_dim * len(add_time_ids)
         expected_add_embed_dim = self.unet.add_embedding.linear_1.in_features
 
         if expected_add_embed_dim != passed_add_embed_dim:
@@ -179,14 +175,10 @@ class SVDLightningModule(LightningModule):
         add_time_ids = add_time_ids.repeat(batch_size, 1)
         return add_time_ids
 
-
     def configure_optimizers(self):
-        #parameters_list = list(self.cond_generator.parameters())
+        # parameters_list = list(self.cond_generator.parameters())
         parameters_list = []
-        if (
-            self.hparams.params_to_select is None
-            or len(self.hparams.params_to_select) == 0
-        ):
+        if self.hparams.params_to_select is None or len(self.hparams.params_to_select) == 0:
             for param in self.unet.parameters():
                 parameters_list.append(param)
                 param.requires_grad = True
@@ -198,19 +190,18 @@ class SVDLightningModule(LightningModule):
                         param.requires_grad = True
                     else:
                         param.requires_grad = False
-    
+
         optimizer = self.optimizer(
             params=parameters_list,
-            #lr=self.cfg.learning_rate,
-            #betas=(self.cfg.adam_beta1, self.cfg.adam_beta2),
-            #eps=self.cfg.adam_epsilon,
+            # lr=self.cfg.learning_rate,
+            # betas=(self.cfg.adam_beta1, self.cfg.adam_beta2),
+            # eps=self.cfg.adam_epsilon,
         )
         if self.scheduler is None:
             return optimizer
-    
+
         return [optimizer], [{"scheduler": self.scheduler, "interval": "epoch"}]
 
-    
     @torch.no_grad()
     def encode_first_stage(self, x):
         n_samples = default(self.en_and_decode_n_samples_a_time, x.shape[0])
@@ -222,9 +213,7 @@ class SVDLightningModule(LightningModule):
 
         with torch.autocast("cuda", enabled=not self.disable_first_stage_autocast):
             for n in range(n_rounds):
-                out = self.autoencoder.encode(
-                    x[n * n_samples: (n + 1) * n_samples]
-                )
+                out = self.autoencoder.encode(x[n * n_samples : (n + 1) * n_samples])
                 all_out.append(out)
         z = torch.cat(all_out, dim=0)
         z = rearrange(z, "(b f) c h w -> b f c h w", f=video_length)
@@ -232,7 +221,9 @@ class SVDLightningModule(LightningModule):
         return z
 
     def forward(self, x, batch):
-        loss = self.loss_fn(self.model, self.denoiser, self.conditioner, x, batch)  # go to StandardDiffusionLoss
+        loss = self.loss_fn(
+            self.model, self.denoiser, self.conditioner, x, batch
+        )  # go to StandardDiffusionLoss
         loss_mean = loss.mean()
         loss_dict = {"loss": loss_mean}
         return loss_mean, loss_dict
@@ -249,7 +240,14 @@ class SVDLightningModule(LightningModule):
 
         self.log_dict(loss_dict, prog_bar=True, logger=True, on_step=True, on_epoch=True)
 
-        self.log("global_step", self.global_step, prog_bar=True, logger=True, on_step=True, on_epoch=False)
+        self.log(
+            "global_step",
+            self.global_step,
+            prog_bar=True,
+            logger=True,
+            on_step=True,
+            on_epoch=False,
+        )
 
         if self.scheduler_config is not None:
             lr = self.optimizers().param_groups[0]["lr"]
@@ -266,30 +264,24 @@ class SVDLightningModule(LightningModule):
             rand_init = torch.randn(offset_shape, device=input.device)
             # rand_init = repeat(rand_init, "b 1 c -> (b t) c", t=self.num_frames)
             noise = noise + self.offset_noise_level * append_dims(rand_init, input.ndim)
-        #if self.replace_cond_frames:
+        # if self.replace_cond_frames:
         #    sigmas_bc = append_dims((1 - cond_mask) * sigmas, input.ndim)
-        #else:
+        # else:
         sigmas_bc = append_dims(sigmas, input.ndim)
 
         noised_input = input + noise * sigmas_bc
         sigma_shape = sigma.shape
         sigma = append_dims(sigma, noised_input.ndim)
 
-        c_skip = self.sigma_data ** 2 / (sigma ** 2 + self.sigma_data ** 2)
-        c_out = sigma * self.sigma_data / (sigma ** 2 + self.sigma_data ** 2) ** 0.5
-        c_in = 1 / (sigma ** 2 + self.sigma_data ** 2) ** 0.5
+        c_skip = self.sigma_data**2 / (sigma**2 + self.sigma_data**2)
+        c_out = sigma * self.sigma_data / (sigma**2 + self.sigma_data**2) ** 0.5
+        c_in = 1 / (sigma**2 + self.sigma_data**2) ** 0.5
         c_noise = 0.25 * sigma.log()
-        
 
         time_steps = c_noise
-        return None , time_steps
-    
+        return None, time_steps
 
-
-
-
-
-#
+        #
 
         model_output = self(
             noised_input,
@@ -299,9 +291,9 @@ class SVDLightningModule(LightningModule):
         )
 
         if self.replace_cond_frames:  # ignore mask predictions
-            predict = model_output * append_dims(
-                1 - cond_mask, input.ndim
-            ) + input * append_dims(cond_mask, input.ndim)
+            predict = model_output * append_dims(1 - cond_mask, input.ndim) + input * append_dims(
+                cond_mask, input.ndim
+            )
         else:
             predict = model_output
 
@@ -360,12 +352,11 @@ class SVDLightningModule(LightningModule):
         noise_aug_strength = cond_sigmas[0]  # TODO: support batch > 1
         cond_sigmas = cond_sigmas[:, None, None, None, None]
         conditional_pixel_values = (
-            torch.randn_like(conditional_pixel_values) * cond_sigmas
-            + conditional_pixel_values
+            torch.randn_like(conditional_pixel_values) * cond_sigmas + conditional_pixel_values
         )
-        conditional_latents = self.tensor_to_vae_latent(
-            conditional_pixel_values, self.vae
-        )[:, 0, :, :, :]
+        conditional_latents = self.tensor_to_vae_latent(conditional_pixel_values, self.vae)[
+            :, 0, :, :, :
+        ]
         conditional_latents = conditional_latents / self.vae.config.scaling_factor
 
         # Sample a random timestep for each image
@@ -408,9 +399,7 @@ class SVDLightningModule(LightningModule):
             image_mask_dtype = conditional_latents.dtype
             image_mask = 1 - (
                 (random_p >= self.cfg.conditioning_dropout_prob).to(image_mask_dtype)
-                * (random_p < 3 * self.cfg.conditioning_dropout_prob).to(
-                    image_mask_dtype
-                )
+                * (random_p < 3 * self.cfg.conditioning_dropout_prob).to(image_mask_dtype)
             )
             image_mask = image_mask.reshape(batch_size, 1, 1, 1)
             # Final image conditioning.
@@ -446,9 +435,9 @@ class SVDLightningModule(LightningModule):
         weighing = (1 + sigmas**2) * (sigmas**-2.0)
 
         loss = torch.mean(
-            (
-                weighing.float() * (denoised_latents.float() - target.float()) ** 2
-            ).reshape(target.shape[0], -1),
+            (weighing.float() * (denoised_latents.float() - target.float()) ** 2).reshape(
+                target.shape[0], -1
+            ),
             dim=1,
         )
         loss = loss.mean()
@@ -532,7 +521,9 @@ class SVDLightningModule(LightningModule):
                 # self.log("val_img", wandb.Video(video_frames, fps=7))
 
                 output_dir = self.output_dir
-                gif_filename = f"val_img_epoch{self.current_epoch}_step{self.global_step}_{batch_idx}.gif"
+                gif_filename = (
+                    f"val_img_epoch{self.current_epoch}_step{self.global_step}_{batch_idx}.gif"
+                )
                 gif_path = os.path.join(output_dir, gif_filename)
 
                 # Ensure the output directory exists

@@ -2,24 +2,24 @@ from typing import Callable, Iterable, Union
 
 import torch
 from einops import rearrange
-
 from vwm.modules.diffusionmodules.model import Decoder, ResnetBlock
-from .coder import  Decoder
 
 from src.models.components.layers.up_down import ResBlock, ResnetBlock
 from src.utils.utils import partialclass
 
+from .coder import Decoder
+
 
 class VideoResBlock(ResnetBlock):
     def __init__(
-            self,
-            out_channels,
-            *args,
-            dropout=0.0,
-            video_kernel_size=3,
-            alpha=0.0,
-            merge_strategy="learned",
-            **kwargs
+        self,
+        out_channels,
+        *args,
+        dropout=0.0,
+        video_kernel_size=3,
+        alpha=0.0,
+        merge_strategy="learned",
+        **kwargs,
     ):
         super().__init__(out_channels=out_channels, dropout=dropout, *args, **kwargs)
         if video_kernel_size is None:
@@ -35,7 +35,7 @@ class VideoResBlock(ResnetBlock):
             down=False,
             kernel_size=video_kernel_size,
             use_checkpoint=False,
-            skip_t_emb=True
+            skip_t_emb=True,
         )
 
         self.merge_strategy = merge_strategy
@@ -86,7 +86,7 @@ class AE3DConv(torch.nn.Conv2d):
             in_channels=out_channels,
             out_channels=out_channels,
             kernel_size=video_kernel_size,
-            padding=padding
+            padding=padding,
         )
 
     def forward(self, input, timesteps, skip_video=False):
@@ -108,20 +108,20 @@ class VideoDecoder(Decoder):
     available_time_modes = ["all", "conv-only", "attn-only"]
 
     def __init__(
-            self,
-            *args,
-            video_kernel_size: Union[int, list] = 3,
-            alpha: float = 0.0,
-            merge_strategy: str = "learned",
-            time_mode: str = "conv-only",
-            **kwargs
+        self,
+        *args,
+        video_kernel_size: Union[int, list] = 3,
+        alpha: float = 0.0,
+        merge_strategy: str = "learned",
+        time_mode: str = "conv-only",
+        **kwargs,
     ):
         self.video_kernel_size = video_kernel_size
         self.alpha = alpha
         self.merge_strategy = merge_strategy
         self.time_mode = time_mode
         assert (
-                self.time_mode in self.available_time_modes
+            self.time_mode in self.available_time_modes
         ), f"time_mode parameter has to be in {self.available_time_modes}"
         super().__init__(*args, **kwargs)
 
@@ -130,9 +130,7 @@ class VideoDecoder(Decoder):
             raise NotImplementedError
         else:
             return (
-                self.conv_out.time_mix_conv.weight
-                if not skip_time_mix
-                else self.conv_out.weight
+                self.conv_out.time_mix_conv.weight if not skip_time_mix else self.conv_out.weight
             )
 
     def _make_conv(self) -> Callable:
@@ -147,7 +145,7 @@ class VideoDecoder(Decoder):
                 VideoResBlock,
                 video_kernel_size=self.video_kernel_size,
                 alpha=self.alpha,
-                merge_strategy=self.merge_strategy
+                merge_strategy=self.merge_strategy,
             )
         else:
             return super()._make_resblock()

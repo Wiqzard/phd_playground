@@ -1,12 +1,11 @@
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple, Union
 
+import hydra
 import torch
 import torch.nn as nn
-
 from diffusers.configuration_utils import ConfigMixin, register_to_config
-from diffusers.loaders import UNet2DConditionLoadersMixin, PeftAdapterMixin
-from diffusers.utils import BaseOutput, logging
+from diffusers.loaders import PeftAdapterMixin, UNet2DConditionLoadersMixin
 from diffusers.models.attention_processor import (
     CROSS_ATTENTION_PROCESSORS,
     AttentionProcessor,
@@ -15,15 +14,15 @@ from diffusers.models.attention_processor import (
 from diffusers.models.embeddings import TimestepEmbedding, Timesteps
 from diffusers.models.modeling_utils import ModelMixin
 from diffusers.models.unets.unet_3d_blocks import get_down_block, get_up_block
-from .mid_block_spatio_temporal import UNetMidBlockSpatioTemporal
+from diffusers.utils import BaseOutput, logging
 from omegaconf import DictConfig
-import hydra
+
+from .mid_block_spatio_temporal import UNetMidBlockSpatioTemporal
 
 
 @dataclass
 class UNetSpatioTemporalConditionOutput(BaseOutput):
-    """
-    The output of [`UNetSpatioTemporalConditionModel`].
+    """The output of [`UNetSpatioTemporalConditionModel`].
 
     Args:
         sample (`torch.Tensor` of shape `(batch_size, num_frames, num_channels, height, width)`):
@@ -36,9 +35,8 @@ class UNetSpatioTemporalConditionOutput(BaseOutput):
 class UNetSpatioTemporalConditionModel(
     ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin, PeftAdapterMixin
 ):
-    r"""
-    A conditional Spatio-Temporal UNet model that takes a noisy video frames, conditional state, and a timestep and
-    returns a sample shaped output.
+    r"""A conditional Spatio-Temporal UNet model that takes a noisy video frames, conditional state,
+    and a timestep and returns a sample shaped output.
 
     This model inherits from [`ModelMixin`]. Check the superclass documentation for its generic methods implemented
     for all models (such as downloading or saving).
@@ -152,9 +150,7 @@ class UNetSpatioTemporalConditionModel(
 
         self.time_embedding = TimestepEmbedding(timestep_input_dim, time_embed_dim)
 
-        self.add_time_proj = Timesteps(
-            addition_time_embed_dim, True, downscale_freq_shift=0
-        )
+        self.add_time_proj = Timesteps(addition_time_embed_dim, True, downscale_freq_shift=0)
         self.add_embedding = TimestepEmbedding(
             projection_class_embeddings_input_dim, time_embed_dim
         )
@@ -172,9 +168,7 @@ class UNetSpatioTemporalConditionModel(
             layers_per_block = [layers_per_block] * len(down_block_types)
 
         if isinstance(transformer_layers_per_block, int):
-            transformer_layers_per_block = [transformer_layers_per_block] * len(
-                down_block_types
-            )
+            transformer_layers_per_block = [transformer_layers_per_block] * len(down_block_types)
 
         blocks_time_embed_dim = time_embed_dim
 
@@ -217,9 +211,7 @@ class UNetSpatioTemporalConditionModel(
         reversed_num_attention_heads = list(reversed(num_attention_heads))
         reversed_layers_per_block = list(reversed(layers_per_block))
         reversed_cross_attention_dim = list(reversed(cross_attention_dim))
-        reversed_transformer_layers_per_block = list(
-            reversed(transformer_layers_per_block)
-        )
+        reversed_transformer_layers_per_block = list(reversed(transformer_layers_per_block))
 
         output_channel = reversed_block_out_channels[0]
         for i, up_block_type in enumerate(up_block_types):
@@ -227,9 +219,7 @@ class UNetSpatioTemporalConditionModel(
 
             prev_output_channel = output_channel
             output_channel = reversed_block_out_channels[i]
-            input_channel = reversed_block_out_channels[
-                min(i + 1, len(block_out_channels) - 1)
-            ]
+            input_channel = reversed_block_out_channels[min(i + 1, len(block_out_channels) - 1)]
 
             # add upsample block for all BUT final layer
             if not is_final_block:
@@ -300,8 +290,7 @@ class UNetSpatioTemporalConditionModel(
     def set_attn_processor(
         self, processor: Union[AttentionProcessor, Dict[str, AttentionProcessor]]
     ):
-        r"""
-        Sets the attention processor to use to compute attention.
+        r"""Sets the attention processor to use to compute attention.
 
         Parameters:
             processor (`dict` of `AttentionProcessor` or only `AttentionProcessor`):
@@ -310,7 +299,6 @@ class UNetSpatioTemporalConditionModel(
 
                 If `processor` is a dict, the key needs to define the path to the corresponding cross attention
                 processor. This is strongly recommended when setting trainable attention processors.
-
         """
         count = len(self.attn_processors.keys())
 
@@ -334,12 +322,9 @@ class UNetSpatioTemporalConditionModel(
             fn_recursive_attn_processor(name, module, processor)
 
     def set_default_attn_processor(self):
-        """
-        Disables custom attention processors and sets the default attention implementation.
-        """
+        """Disables custom attention processors and sets the default attention implementation."""
         if all(
-            proc.__class__ in CROSS_ATTENTION_PROCESSORS
-            for proc in self.attn_processors.values()
+            proc.__class__ in CROSS_ATTENTION_PROCESSORS for proc in self.attn_processors.values()
         ):
             processor = AttnProcessor()
         else:
@@ -354,9 +339,7 @@ class UNetSpatioTemporalConditionModel(
             module.gradient_checkpointing = value
 
     # Copied from diffusers.models.unets.unet_3d_condition.UNet3DConditionModel.enable_forward_chunking
-    def enable_forward_chunking(
-        self, chunk_size: Optional[int] = None, dim: int = 0
-    ) -> None:
+    def enable_forward_chunking(self, chunk_size: Optional[int] = None, dim: int = 0) -> None:
         """
         Sets the attention processor to use [feed forward
         chunking](https://huggingface.co/blog/reformer#2-chunked-feed-forward-layers).
@@ -375,9 +358,7 @@ class UNetSpatioTemporalConditionModel(
         # By default chunk size is 1
         chunk_size = chunk_size or 1
 
-        def fn_recursive_feed_forward(
-            module: torch.nn.Module, chunk_size: int, dim: int
-        ):
+        def fn_recursive_feed_forward(module: torch.nn.Module, chunk_size: int, dim: int):
             if hasattr(module, "set_chunk_feed_forward"):
                 module.set_chunk_feed_forward(chunk_size=chunk_size, dim=dim)
 
@@ -395,8 +376,7 @@ class UNetSpatioTemporalConditionModel(
         added_time_ids: torch.Tensor,
         return_dict: bool = True,
     ) -> Union[UNetSpatioTemporalConditionOutput, Tuple]:
-        r"""
-        The [`UNetSpatioTemporalConditionModel`] forward method.
+        r"""The [`UNetSpatioTemporalConditionModel`] forward method.
 
         Example shapes:
             sample = (1, 12, 8, 40, 64)
@@ -462,9 +442,7 @@ class UNetSpatioTemporalConditionModel(
         emb = emb.repeat_interleave(num_frames, dim=0)
         # encoder_hidden_states: [batch, 1, channels] -> [batch * frames, 1, channels]
         if encoder_hidden_states is not None:
-            encoder_hidden_states = encoder_hidden_states.repeat_interleave(
-                num_frames, dim=0
-            )
+            encoder_hidden_states = encoder_hidden_states.repeat_interleave(num_frames, dim=0)
 
         # 2. pre-process
         sample = self.conv_in(sample)
@@ -505,9 +483,7 @@ class UNetSpatioTemporalConditionModel(
         # 5. up
         for i, upsample_block in enumerate(self.up_blocks):
             res_samples = down_block_res_samples[-len(upsample_block.resnets) :]
-            down_block_res_samples = down_block_res_samples[
-                : -len(upsample_block.resnets)
-            ]
+            down_block_res_samples = down_block_res_samples[: -len(upsample_block.resnets)]
 
             if (
                 hasattr(upsample_block, "has_cross_attention")

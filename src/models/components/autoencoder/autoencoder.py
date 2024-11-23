@@ -19,9 +19,7 @@ class AutoencoderKLTemporalDecoderWrapper(AutoencoderKLTemporalDecoder):
             "low_cpu_mem_usage": low_cpu_mem_usage,
             "variant": variant,
         }
-        parent_kwargs = {
-            k: v for k, v in kwargs.items() if k not in wrapper_specific_kwargs
-        }
+        parent_kwargs = {k: v for k, v in kwargs.items() if k not in wrapper_specific_kwargs}
         super().__init__(*args, **parent_kwargs)
 
         if pretrained:

@@ -1,32 +1,43 @@
-from typing import List, Union, Optional
+from typing import List, Optional, Union
 
 import torch
-from torch import nn
 from einops import rearrange
+from torch import nn
 
-from src.models.components.layers.up_down import ResBlock, linear, normalization, zero_module, conv_nd, Downsample, Upsample, Timestep, TimestepEmbedSequential, timestep_embedding
+from src.models.components.layers.up_down import (
+    Downsample,
+    ResBlock,
+    Timestep,
+    TimestepEmbedSequential,
+    Upsample,
+    conv_nd,
+    linear,
+    normalization,
+    timestep_embedding,
+    zero_module,
+)
 from src.models.components.layers.video_attention import SpatialVideoTransformer
-
 from src.utils.torch_utils import default, repeat_as_img_seq
+
 from .time_mixer import AlphaBlender
 
 
 class VideoResBlock(ResBlock):
     def __init__(
-            self,
-            channels: int,
-            emb_channels: int,
-            dropout: float,
-            video_kernel_size: Union[int, List[int]] = 3,
-            merge_strategy: str = "fixed",
-            merge_factor: float = 0.5,
-            out_channels: Optional[int] = None,
-            use_conv: bool = False,
-            use_scale_shift_norm: bool = False,
-            dims: int = 2,
-            use_checkpoint: bool = False,
-            up: bool = False,
-            down: bool = False
+        self,
+        channels: int,
+        emb_channels: int,
+        dropout: float,
+        video_kernel_size: Union[int, List[int]] = 3,
+        merge_strategy: str = "fixed",
+        merge_factor: float = 0.5,
+        out_channels: Optional[int] = None,
+        use_conv: bool = False,
+        use_scale_shift_norm: bool = False,
+        dims: int = 2,
+        use_checkpoint: bool = False,
+        up: bool = False,
+        down: bool = False,
     ):
         super().__init__(
             channels,
@@ -38,7 +49,7 @@ class VideoResBlock(ResBlock):
             dims=dims,
             use_checkpoint=use_checkpoint,
             up=up,
-            down=down
+            down=down,
         )
         self.time_stack = ResBlock(
             default(out_channels, channels),
@@ -53,28 +64,19 @@ class VideoResBlock(ResBlock):
             kernel_size=video_kernel_size,
             use_checkpoint=use_checkpoint,
             exchange_temb_dims=True,
-            causal=False
+            causal=False,
         )
         self.time_mixer = AlphaBlender(
-            alpha=merge_factor,
-            merge_strategy=merge_strategy,
-            rearrange_pattern="b t -> b 1 t 1 1"
+            alpha=merge_factor, merge_strategy=merge_strategy, rearrange_pattern="b t -> b 1 t 1 1"
         )
 
-    def forward(
-            self,
-            x: torch.Tensor,
-            emb: torch.Tensor,
-            num_frames: int
-    ) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, emb: torch.Tensor, num_frames: int) -> torch.Tensor:
         x = super().forward(x, emb)
 
         x_mix = rearrange(x, "(b t) c h w -> b c t h w", t=num_frames)
         x = rearrange(x, "(b t) c h w -> b c t h w", t=num_frames)
 
-        x = self.time_stack(
-            x, rearrange(emb, "(b t) ... -> b t ...", t=num_frames)
-        )
+        x = self.time_stack(x, rearrange(emb, "(b t) ... -> b t ...", t=num_frames))
         x = self.time_mixer(x_spatial=x_mix, x_temporal=x)
         x = rearrange(x, "b c t h w -> (b t) c h w")
         return x
@@ -82,40 +84,40 @@ class VideoResBlock(ResBlock):
 
 class VideoUNet(nn.Module):
     def __init__(
-            self,
-            in_channels: int,
-            model_channels: int,
-            out_channels: int,
-            num_res_blocks: int,
-            attention_resolutions: int,
-            dropout: float = 0.0,
-            channel_mult: List[int] = (1, 2, 4, 8),
-            conv_resample: bool = True,
-            dims: int = 2,
-            num_classes: Optional[int] = None,
-            use_checkpoint: bool = False,
-            num_heads: int = -1,
-            num_head_channels: int = -1,
-            num_heads_upsample: int = -1,
-            use_scale_shift_norm: bool = False,
-            resblock_updown: bool = False,
-            transformer_depth: Union[List[int], int] = 1,
-            transformer_depth_middle: Optional[int] = None,
-            context_dim: Optional[int] = None,
-            time_downup: bool = False,
-            time_context_dim: Optional[int] = None,
-            extra_ff_mix_layer: bool = False,
-            use_spatial_context: bool = False,
-            merge_strategy: str = "learned_with_images",
-            merge_factor: float = 0.5,
-            spatial_transformer_attn_type: str = "softmax",
-            video_kernel_size: Union[int, List[int]] = 3,
-            use_linear_in_transformer: bool = False,
-            adm_in_channels: Optional[int] = None,
-            disable_temporal_crossattention: bool = False,
-            max_ddpm_temb_period: int = 10000,
-            add_lora: bool = False,
-            action_control: bool = False
+        self,
+        in_channels: int,
+        model_channels: int,
+        out_channels: int,
+        num_res_blocks: int,
+        attention_resolutions: int,
+        dropout: float = 0.0,
+        channel_mult: List[int] = (1, 2, 4, 8),
+        conv_resample: bool = True,
+        dims: int = 2,
+        num_classes: Optional[int] = None,
+        use_checkpoint: bool = False,
+        num_heads: int = -1,
+        num_head_channels: int = -1,
+        num_heads_upsample: int = -1,
+        use_scale_shift_norm: bool = False,
+        resblock_updown: bool = False,
+        transformer_depth: Union[List[int], int] = 1,
+        transformer_depth_middle: Optional[int] = None,
+        context_dim: Optional[int] = None,
+        time_downup: bool = False,
+        time_context_dim: Optional[int] = None,
+        extra_ff_mix_layer: bool = False,
+        use_spatial_context: bool = False,
+        merge_strategy: str = "learned_with_images",
+        merge_factor: float = 0.5,
+        spatial_transformer_attn_type: str = "softmax",
+        video_kernel_size: Union[int, List[int]] = 3,
+        use_linear_in_transformer: bool = False,
+        adm_in_channels: Optional[int] = None,
+        disable_temporal_crossattention: bool = False,
+        max_ddpm_temb_period: int = 10000,
+        add_lora: bool = False,
+        action_control: bool = False,
     ):
         super().__init__()
         assert context_dim is not None
@@ -134,9 +136,7 @@ class VideoUNet(nn.Module):
         self.out_channels = out_channels
         if isinstance(transformer_depth, int):
             transformer_depth = len(channel_mult) * [transformer_depth]
-        transformer_depth_middle = default(
-            transformer_depth_middle, transformer_depth[-1]
-        )
+        transformer_depth_middle = default(transformer_depth_middle, transformer_depth[-1])
 
         self.num_res_blocks = num_res_blocks
         self.attention_resolutions = attention_resolutions
@@ -153,12 +153,12 @@ class VideoUNet(nn.Module):
         self.time_embed = nn.Sequential(
             linear(model_channels, time_embed_dim),
             nn.SiLU(),
-            linear(time_embed_dim, time_embed_dim)
+            linear(time_embed_dim, time_embed_dim),
         )
         self.cond_time_stack_embed = nn.Sequential(
             linear(model_channels, time_embed_dim),
             nn.SiLU(),
-            linear(time_embed_dim, time_embed_dim)
+            linear(time_embed_dim, time_embed_dim),
         )
 
         if self.num_classes is not None:
@@ -173,8 +173,8 @@ class VideoUNet(nn.Module):
                     nn.Sequential(
                         linear(model_channels, time_embed_dim),
                         nn.SiLU(),
-                        linear(time_embed_dim, time_embed_dim)
-                    )
+                        linear(time_embed_dim, time_embed_dim),
+                    ),
                 )
             elif self.num_classes == "sequential":  # this way
                 assert adm_in_channels is not None
@@ -182,18 +182,14 @@ class VideoUNet(nn.Module):
                     nn.Sequential(
                         linear(adm_in_channels, time_embed_dim),
                         nn.SiLU(),
-                        linear(time_embed_dim, time_embed_dim)
+                        linear(time_embed_dim, time_embed_dim),
                     )
                 )
             else:
                 raise ValueError
 
         self.input_blocks = nn.ModuleList(
-            [
-                TimestepEmbedSequential(
-                    conv_nd(dims, in_channels, model_channels, 3, padding=1)
-                )
-            ]
+            [TimestepEmbedSequential(conv_nd(dims, in_channels, model_channels, 3, padding=1))]
         )
         self._feature_size = model_channels
         input_block_chans = [model_channels]
@@ -201,15 +197,15 @@ class VideoUNet(nn.Module):
         ds = 1
 
         def get_attention_layer(
-                ch,
-                num_heads,
-                dim_head,
-                depth=1,
-                context_dim=None,
-                use_checkpoint=False,
-                disabled_sa=False,
-                add_lora=False,
-                action_control=False
+            ch,
+            num_heads,
+            dim_head,
+            depth=1,
+            context_dim=None,
+            use_checkpoint=False,
+            disabled_sa=False,
+            add_lora=False,
+            action_control=False,
         ):
             return SpatialVideoTransformer(
                 ch,
@@ -230,22 +226,22 @@ class VideoUNet(nn.Module):
                 disable_temporal_crossattention=disable_temporal_crossattention,
                 max_time_embed_period=max_ddpm_temb_period,
                 add_lora=add_lora,
-                action_control=action_control
+                action_control=action_control,
             )
 
         def get_resblock(
-                merge_factor,
-                merge_strategy,
-                video_kernel_size,
-                ch,
-                time_embed_dim,
-                dropout,
-                out_ch,
-                dims,
-                use_checkpoint,
-                use_scale_shift_norm,
-                down=False,
-                up=False
+            merge_factor,
+            merge_strategy,
+            video_kernel_size,
+            ch,
+            time_embed_dim,
+            dropout,
+            out_ch,
+            dims,
+            use_checkpoint,
+            use_scale_shift_norm,
+            down=False,
+            up=False,
         ):
             return VideoResBlock(
                 merge_factor=merge_factor,
@@ -259,7 +255,7 @@ class VideoUNet(nn.Module):
                 use_checkpoint=use_checkpoint,
                 use_scale_shift_norm=use_scale_shift_norm,
                 down=down,
-                up=up
+                up=up,
             )
 
         for level, mult in enumerate(channel_mult):
@@ -275,7 +271,7 @@ class VideoUNet(nn.Module):
                         out_ch=mult * model_channels,
                         dims=dims,
                         use_checkpoint=use_checkpoint,
-                        use_scale_shift_norm=use_scale_shift_norm
+                        use_scale_shift_norm=use_scale_shift_norm,
                     )
                 ]
                 ch = mult * model_channels
@@ -296,7 +292,7 @@ class VideoUNet(nn.Module):
                             use_checkpoint=use_checkpoint,
                             disabled_sa=False,
                             add_lora=add_lora,
-                            action_control=action_control
+                            action_control=action_control,
                         )
                     )
                 self.input_blocks.append(TimestepEmbedSequential(*layers))
@@ -318,10 +314,16 @@ class VideoUNet(nn.Module):
                             dims=dims,
                             use_checkpoint=use_checkpoint,
                             use_scale_shift_norm=use_scale_shift_norm,
-                            down=True
+                            down=True,
                         )
                         if resblock_updown
-                        else Downsample(ch, conv_resample, dims=dims, out_channels=out_ch, third_down=time_downup)
+                        else Downsample(
+                            ch,
+                            conv_resample,
+                            dims=dims,
+                            out_channels=out_ch,
+                            third_down=time_downup,
+                        )
                     )
                 )
                 ch = out_ch
@@ -346,7 +348,7 @@ class VideoUNet(nn.Module):
                 dropout=dropout,
                 dims=dims,
                 use_checkpoint=use_checkpoint,
-                use_scale_shift_norm=use_scale_shift_norm
+                use_scale_shift_norm=use_scale_shift_norm,
             ),
             get_attention_layer(
                 ch,
@@ -356,7 +358,7 @@ class VideoUNet(nn.Module):
                 context_dim=context_dim,
                 use_checkpoint=use_checkpoint,
                 add_lora=add_lora,
-                action_control=action_control
+                action_control=action_control,
             ),
             get_resblock(
                 merge_factor=merge_factor,
@@ -368,8 +370,8 @@ class VideoUNet(nn.Module):
                 dropout=dropout,
                 dims=dims,
                 use_checkpoint=use_checkpoint,
-                use_scale_shift_norm=use_scale_shift_norm
-            )
+                use_scale_shift_norm=use_scale_shift_norm,
+            ),
         )
         self._feature_size += ch
 
@@ -388,7 +390,7 @@ class VideoUNet(nn.Module):
                         out_ch=model_channels * mult,
                         dims=dims,
                         use_checkpoint=use_checkpoint,
-                        use_scale_shift_norm=use_scale_shift_norm
+                        use_scale_shift_norm=use_scale_shift_norm,
                     )
                 ]
                 ch = model_channels * mult
@@ -409,7 +411,7 @@ class VideoUNet(nn.Module):
                             use_checkpoint=use_checkpoint,
                             disabled_sa=False,
                             add_lora=add_lora,
-                            action_control=action_control
+                            action_control=action_control,
                         )
                     )
                 if level and i == num_res_blocks:
@@ -427,10 +429,12 @@ class VideoUNet(nn.Module):
                             dims=dims,
                             use_checkpoint=use_checkpoint,
                             use_scale_shift_norm=use_scale_shift_norm,
-                            up=True
+                            up=True,
                         )
                         if resblock_updown
-                        else Upsample(ch, conv_resample, dims=dims, out_channels=out_ch, third_up=time_downup)
+                        else Upsample(
+                            ch, conv_resample, dims=dims, out_channels=out_ch, third_up=time_downup
+                        )
                     )
 
                 self.output_blocks.append(TimestepEmbedSequential(*layers))
@@ -439,29 +443,29 @@ class VideoUNet(nn.Module):
         self.out = nn.Sequential(
             normalization(ch),
             nn.SiLU(),
-            zero_module(
-                conv_nd(dims, model_channels, out_channels, 3, padding=1)
-            )
+            zero_module(conv_nd(dims, model_channels, out_channels, 3, padding=1)),
         )
 
     def forward(
-            self,
-            x: torch.Tensor,
-            timesteps: torch.Tensor,
-            context: Optional[torch.Tensor] = None,
-            y: Optional[torch.Tensor] = None,
-            time_context: Optional[torch.Tensor] = None,
-            cond_mask: Optional[torch.Tensor] = None,
-            num_frames: Optional[int] = None
+        self,
+        x: torch.Tensor,
+        timesteps: torch.Tensor,
+        context: Optional[torch.Tensor] = None,
+        y: Optional[torch.Tensor] = None,
+        time_context: Optional[torch.Tensor] = None,
+        cond_mask: Optional[torch.Tensor] = None,
+        num_frames: Optional[int] = None,
     ):
         assert (y is not None) == (
-                self.num_classes is not None
+            self.num_classes is not None
         ), "Must specify y if and only if the model is class-conditional"
         hs = list()
         t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
         if cond_mask is not None and cond_mask.any():
             cond_mask_ = cond_mask[..., None].float()
-            emb = self.cond_time_stack_embed(t_emb) * cond_mask_ + self.time_embed(t_emb) * (1 - cond_mask_)
+            emb = self.cond_time_stack_embed(t_emb) * cond_mask_ + self.time_embed(t_emb) * (
+                1 - cond_mask_
+            )
         else:
             emb = self.time_embed(t_emb)
 
@@ -477,32 +481,16 @@ class VideoUNet(nn.Module):
 
         h = x
         for module in self.input_blocks:
-            h = module(
-                h,
-                emb,
-                context=context,
-                time_context=time_context,
-                num_frames=num_frames
-            )
+            h = module(h, emb, context=context, time_context=time_context, num_frames=num_frames)
             hs.append(h)
 
         h = self.middle_block(
-            h,
-            emb,
-            context=context,
-            time_context=time_context,
-            num_frames=num_frames
+            h, emb, context=context, time_context=time_context, num_frames=num_frames
         )
 
         for module in self.output_blocks:
             h = torch.cat((h, hs.pop()), dim=1)
-            h = module(
-                h,
-                emb,
-                context=context,
-                time_context=time_context,
-                num_frames=num_frames
-            )
+            h = module(h, emb, context=context, time_context=time_context, num_frames=num_frames)
 
         h = h.type(x.dtype)
         return self.out(h)

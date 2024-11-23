@@ -1,13 +1,15 @@
+from typing import Any, Dict, List, Tuple
+
 import torch
-from einops import rearrange
 
 # from utils.torch_utils import spatial_transform
 import torch.nn.functional as F
-from torch import nn
+from einops import rearrange
 from omegaconf import DictConfig
-from typing import List, Tuple, Dict, Any
+from torch import nn
 from torchvision import transforms as T
-from ..utils import spatial_transform, RectangleRegion
+
+from ..utils import RectangleRegion, spatial_transform
 
 ImageNet_Norm = T.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
 
@@ -46,20 +48,15 @@ class DINOFeaturesProvider:
         self.max_condition_tokens = len(condition_frames) * int(
             cage_crop.min_w
             * cage_crop.min_h
-            * float(
-                (image_width // self.patch_size) * (image_height // self.patch_size)
-            )
+            * float((image_width // self.patch_size) * (image_height // self.patch_size))
         )
         assert (
-            num_condition_tokens >= 1
-            and num_condition_tokens <= self.max_condition_tokens
+            num_condition_tokens >= 1 and num_condition_tokens <= self.max_condition_tokens
         ), f"num_condition_tokens should be in [1, {self.max_condition_tokens}]"
 
         assert (image_width // 14) % 2 == 0 and (
             image_height // 14
-        ) % 2 == 0, (
-            "Image width and height should be divisible by 2 after dividing by 14"
-        )
+        ) % 2 == 0, "Image width and height should be divisible by 2 after dividing by 14"
         self.dino_patches_width = image_width // 28
         self.dino_patches_height = image_height // 28
         # Ensure both are divisible by 2 -> NOTE: not needed ATM since patches should be divisible by 2 already
@@ -69,9 +66,7 @@ class DINOFeaturesProvider:
             self.dino_patches_width * self.dino_patches_height * len(condition_frames)
         )
 
-        print(
-            f"Using DINOv2 model with {self.num_pos_emb_tokens} positional embeddings"
-        )
+        print(f"Using DINOv2 model with {self.num_pos_emb_tokens} positional embeddings")
         self.num_condition_tokens = num_condition_tokens
 
     def get_features(
@@ -80,8 +75,8 @@ class DINOFeaturesProvider:
         force_roi: RectangleRegion = None,
         force_condition_frames: torch.Tensor = None,
     ) -> torch.Tensor:
-        """
-        Given target_frames of shape [b l c h w], return the conditioning features.
+        """Given target_frames of shape [b l c h w], return the conditioning features.
+
         T = number of conditioning tokens over all frames
         Args:
             target_frames (torch.Tensor): [b l c h w]
@@ -89,9 +84,7 @@ class DINOFeaturesProvider:
             torch.Tensor: [b l c h w]
         """
         frames = (
-            self.condition_frames
-            if force_condition_frames is None
-            else force_condition_frames
+            self.condition_frames if force_condition_frames is None else force_condition_frames
         )
         dino_feats = crop_and_get_dino_features(
             num_dino_layers=self.num_dino_layers,
@@ -103,8 +96,8 @@ class DINOFeaturesProvider:
         return dino_feats
 
     def group_tokens(self, dino_feats: torch.Tensor) -> torch.Tensor:
-        """
-        Given the dino_feats, reduce the tokens by grouping them.
+        """Given the dino_feats, reduce the tokens by grouping them.
+
         Args:
             dino_feats (torch.Tensor): [b l c h w]
         Returns:
@@ -115,14 +108,12 @@ class DINOFeaturesProvider:
         # So we group each 2x2 square of the dino_feats to get 1024 channels.
         b, l, c, h, w = dino_feats.size()
         dino_feats = dino_feats.reshape(b, l, c, h // 2, 2, w // 2, 2)
-        dino_feats = dino_feats.permute(0, 1, 3, 5, 4, 6, 2).reshape(
-            b, l, h // 2, w // 2, 4, c
-        )
+        dino_feats = dino_feats.permute(0, 1, 3, 5, 4, 6, 2).reshape(b, l, h // 2, w // 2, 4, c)
         return dino_feats
 
     def get_patches_to_select(self, cage_feats: torch.Tensor) -> torch.Tensor:
-        """
-        Given the cage_feats, return the patches to select.
+        """Given the cage_feats, return the patches to select.
+
         Args:
             cage_feats (torch.Tensor): [b l h2 w2 4 c]
         Returns:
@@ -133,9 +124,7 @@ class DINOFeaturesProvider:
         # L = number of condition frames * number of valid patches per frame
         h = cage_feats.size(2)
         w = cage_feats.size(3)
-        valid_feats = torch.any(
-            torch.abs(cage_feats) > 1e-5, dim=(-1, -2)
-        )  # [b l h2 w2]
+        valid_feats = torch.any(torch.abs(cage_feats) > 1e-5, dim=(-1, -2))  # [b l h2 w2]
 
         B = valid_feats.size(0)
 
@@ -145,9 +134,9 @@ class DINOFeaturesProvider:
             patches_to_select = torch.argwhere(valid_feats[b,].view(-1))
             patches_xy = torch.argwhere(valid_feats[b,])
 
-            perm = torch.randperm(
-                patches_to_select.size(0), device=patches_to_select.device
-            )[: self.num_condition_tokens]
+            perm = torch.randperm(patches_to_select.size(0), device=patches_to_select.device)[
+                : self.num_condition_tokens
+            ]
             patches_to_select = patches_to_select[perm]
             patches_xy = patches_xy[perm]
 
@@ -182,11 +171,7 @@ class DINOFeaturesProvider:
 
 
 def crop_image_for_dino_input(x: torch.Tensor):
-    """
-    Crop the image to be divisible by 14
-    :param x: [(bl) c h w]
-    :return: [(bl) c h w]
-    """
+    """Crop the image to be divisible by 14 :param x: [(bl) c h w] :return: [(bl) c h w]"""
     h, w = x.size(-2), x.size(-1)
     new_h = h - (h % 14)
     new_w = w - (w % 14)
@@ -195,8 +180,7 @@ def crop_image_for_dino_input(x: torch.Tensor):
 
 @torch.no_grad()
 def get_dino_features(dino, x: torch.Tensor, n: int = 1):
-    """
-    Autocrops the image to be divisible by 14, and then gets the features from the DINO model.
+    """Autocrops the image to be divisible by 14, and then gets the features from the DINO model.
 
     :param x: [(bl) c h w]
     :param n: number of layers from the last
@@ -242,8 +226,8 @@ def crop_and_get_dino_features(
     cage_crop: DictConfig,
     force_roi: RectangleRegion = None,
 ) -> torch.Tensor:
-    """
-    Get the features from the DINO model and apply a random spatial transform to the target frames.
+    """Get the features from the DINO model and apply a random spatial transform to the target
+    frames.
 
     Args:
         num_dino_layers (int): number of layers from the last
@@ -282,9 +266,7 @@ def crop_and_get_dino_features(
         mode="bilinear",
     )
 
-    feats, cropped = get_dino_features(
-        dino, flat_transformed_target_frames, n=num_dino_layers
-    )
+    feats, cropped = get_dino_features(dino, flat_transformed_target_frames, n=num_dino_layers)
 
     h = H // 14
     w = W // 14

@@ -1,23 +1,23 @@
+from typing import Any, Dict, Optional, Tuple, Union
+
 import torch
 import torch.nn as nn
-from typing import Optional, Tuple, Union, Dict, Any
 from diffusers.models.attention import (
+    Attention,
     BasicTransformerBlock,
     TemporalBasicTransformerBlock,
 )
 from diffusers.models.embeddings import TimestepEmbedding, Timesteps
+from diffusers.models.resnet import AlphaBlender, SpatioTemporalResBlock
 from diffusers.models.transformers.transformer_temporal import (
     TransformerTemporalModelOutput,
 )
-from diffusers.models.resnet import SpatioTemporalResBlock, AlphaBlender
 from diffusers.utils import is_torch_version
-from diffusers.models.attention import Attention
 from einops import rearrange
 
 
 class TransformerSpatioTemporalModel(nn.Module):
-    """
-    A Transformer model for video-like data.
+    """A Transformer model for video-like data.
 
     Parameters:
         num_attention_heads (`int`, *optional*, defaults to 16): The number of heads to use for multi-head attention.
@@ -48,9 +48,7 @@ class TransformerSpatioTemporalModel(nn.Module):
 
         # 2. Define input layers
         self.in_channels = in_channels
-        self.norm = torch.nn.GroupNorm(
-            num_groups=32, num_channels=in_channels, eps=1e-6
-        )
+        self.norm = torch.nn.GroupNorm(num_groups=32, num_channels=in_channels, eps=1e-6)
         self.proj_in = nn.Linear(in_channels, inner_dim)
 
         # 3. Define transformers blocks
@@ -81,9 +79,7 @@ class TransformerSpatioTemporalModel(nn.Module):
         )
 
         time_embed_dim = in_channels * 4
-        self.time_pos_embed = TimestepEmbedding(
-            in_channels, time_embed_dim, out_dim=in_channels
-        )
+        self.time_pos_embed = TimestepEmbedding(in_channels, time_embed_dim, out_dim=in_channels)
         self.time_proj = Timesteps(in_channels, True, 0)
         self.time_mixer = AlphaBlender(alpha=0.5, merge_strategy="learned_with_images")
 
@@ -213,9 +209,7 @@ class TransformerSpatioTemporalModel(nn.Module):
 class ZeroConv(nn.Module):
     def __init__(self, in_channels: int, out_channels: int):
         super().__init__()
-        self.conv = nn.Conv2d(
-            in_channels, out_channels, kernel_size=1, stride=1, padding=0
-        )
+        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=1, padding=0)
         self.conv.weight.data.zero_()
         self.conv.bias.data.zero_()
 

@@ -1,8 +1,8 @@
 from dataclasses import dataclass
 
+import numpy as np
 import torch
 import torch.nn.functional as F
-import numpy as np
 from PIL import Image
 
 
@@ -88,8 +88,7 @@ def _gaussian(window_size: int, sigma):
     batch_size = sigma.shape[0]
 
     x = (
-        torch.arange(window_size, device=sigma.device, dtype=sigma.dtype)
-        - window_size // 2
+        torch.arange(window_size, device=sigma.device, dtype=sigma.dtype) - window_size // 2
     ).expand(batch_size, -1)
 
     if window_size % 2 == 0:
@@ -117,19 +116,16 @@ def _gaussian_blur2d(input, kernel_size, sigma):
 
 
 def export_to_gif(frames, output_gif_path, fps):
-    """
-    Export a list of frames to a GIF.
+    """Export a list of frames to a GIF.
 
     Args:
     - frames (list): List of frames (as numpy arrays or PIL Image objects).
     - output_gif_path (str): Path to save the output GIF.
     - duration_ms (int): Duration of each frame in milliseconds.
-
     """
     # Convert numpy arrays to PIL Images if needed
     pil_frames = [
-        Image.fromarray(frame) if isinstance(frame, np.ndarray) else frame
-        for frame in frames
+        Image.fromarray(frame) if isinstance(frame, np.ndarray) else frame for frame in frames
     ]
 
     pil_frames[0].save(
@@ -194,26 +190,16 @@ def spatial_transform(
          [0, s]]               [0, 1/s]]
     """
     # 1. construct 2x3 affine matrix for each datapoint in the minibatch
-    theta = (
-        torch.zeros(2, 3, dtype=image.dtype)
-        .repeat(image.shape[0], 1, 1)
-        .to(image.device)
-    )
+    theta = torch.zeros(2, 3, dtype=image.dtype).repeat(image.shape[0], 1, 1).to(image.device)
     # set scaling
     theta[:, 0, 0] = z_where[:, 0] if not inverse else 1 / (z_where[:, 0] + 1e-9)
     theta[:, 1, 1] = z_where[:, 1] if not inverse else 1 / (z_where[:, 1] + 1e-9)
 
     # set translation
-    theta[:, 0, -1] = (
-        z_where[:, 2] if not inverse else -z_where[:, 2] / (z_where[:, 0] + 1e-9)
-    )
-    theta[:, 1, -1] = (
-        z_where[:, 3] if not inverse else -z_where[:, 3] / (z_where[:, 1] + 1e-9)
-    )
+    theta[:, 0, -1] = z_where[:, 2] if not inverse else -z_where[:, 2] / (z_where[:, 0] + 1e-9)
+    theta[:, 1, -1] = z_where[:, 3] if not inverse else -z_where[:, 3] / (z_where[:, 1] + 1e-9)
     # 2. construct sampling grid
     grid = F.affine_grid(theta, out_dims, align_corners=False)
     grid = grid.to(image.dtype)
     # 3. sample image from grid
-    return F.grid_sample(
-        image, grid, align_corners=False, padding_mode=padding_mode, mode=mode
-    )
+    return F.grid_sample(image, grid, align_corners=False, padding_mode=padding_mode, mode=mode)

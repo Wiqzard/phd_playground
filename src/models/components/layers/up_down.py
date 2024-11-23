@@ -6,20 +6,22 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 from torch.utils.checkpoint import checkpoint
-
 from vwm.modules.attention import SpatialTransformer
 from vwm.modules.video_attention import SpatialVideoTransformer
-from .util import avg_pool_nd, conv_nd, linear, normalization, timestep_embedding, zero_module
+
+from .util import (
+    avg_pool_nd,
+    conv_nd,
+    linear,
+    normalization,
+    timestep_embedding,
+    zero_module,
+)
+
 
 class ResnetBlock(nn.Module):
     def __init__(
-            self,
-            *,
-            in_channels,
-            out_channels=None,
-            conv_shortcut=False,
-            dropout,
-            temb_channels=512
+        self, *, in_channels, out_channels=None, conv_shortcut=False, dropout, temb_channels=512
     ):
         super().__init__()
         self.in_channels = in_channels
@@ -36,9 +38,13 @@ class ResnetBlock(nn.Module):
         self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1)
         if self.in_channels != self.out_channels:
             if self.use_conv_shortcut:
-                self.conv_shortcut = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
+                self.conv_shortcut = nn.Conv2d(
+                    in_channels, out_channels, kernel_size=3, stride=1, padding=1
+                )
             else:
-                self.nin_shortcut = nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=1, padding=0)
+                self.nin_shortcut = nn.Conv2d(
+                    in_channels, out_channels, kernel_size=1, stride=1, padding=0
+                )
 
     def forward(self, x, temb):
         h = x
@@ -63,29 +69,24 @@ class ResnetBlock(nn.Module):
 
 
 class TimestepBlock(nn.Module):
-    """
-    Any module where forward() takes timestep embeddings as a second argument.
-    """
+    """Any module where forward() takes timestep embeddings as a second argument."""
 
     @abstractmethod
     def forward(self, x: torch.Tensor, emb: torch.Tensor):
-        """
-        Apply the module to `x` given `emb` timestep embeddings.
-        """
+        """Apply the module to `x` given `emb` timestep embeddings."""
 
 
 class TimestepEmbedSequential(nn.Sequential, TimestepBlock):
-    """
-    A sequential module that passes timestep embeddings to the children that support it as an extra input.
-    """
+    """A sequential module that passes timestep embeddings to the children that support it as an
+    extra input."""
 
     def forward(
-            self,
-            x: torch.Tensor,
-            emb: torch.Tensor,
-            context: Optional[torch.Tensor] = None,
-            time_context: Optional[int] = None,
-            num_frames: Optional[int] = None
+        self,
+        x: torch.Tensor,
+        emb: torch.Tensor,
+        context: Optional[torch.Tensor] = None,
+        time_context: Optional[int] = None,
+        num_frames: Optional[int] = None,
     ):
         from .video_model import VideoResBlock
 
@@ -104,24 +105,24 @@ class TimestepEmbedSequential(nn.Sequential, TimestepBlock):
 
 
 class Upsample(nn.Module):
-    """
-    An upsampling layer with an optional convolution.
+    """An upsampling layer with an optional convolution.
 
     :param channels: channels in the inputs and outputs.
     :param use_conv: a bool determining if a convolution is applied.
-    :param dims: determines if the signal is 1D, 2D, or 3D. If 3D, then upsampling occurs in the inner-two dimensions.
+    :param dims: determines if the signal is 1D, 2D, or 3D. If 3D, then upsampling occurs in the
+        inner-two dimensions.
     """
 
     def __init__(
-            self,
-            channels: int,
-            use_conv: bool,
-            dims: int = 2,
-            out_channels: Optional[int] = None,
-            padding: int = 1,
-            third_up: bool = False,
-            kernel_size: int = 3,
-            scale_factor: int = 2
+        self,
+        channels: int,
+        use_conv: bool,
+        dims: int = 2,
+        out_channels: Optional[int] = None,
+        padding: int = 1,
+        third_up: bool = False,
+        kernel_size: int = 3,
+        scale_factor: int = 2,
     ):
         super().__init__()
         self.channels = channels
@@ -131,7 +132,9 @@ class Upsample(nn.Module):
         self.third_up = third_up
         self.scale_factor = scale_factor
         if use_conv:
-            self.conv = conv_nd(dims, self.channels, self.out_channels, kernel_size, padding=padding)
+            self.conv = conv_nd(
+                dims, self.channels, self.out_channels, kernel_size, padding=padding
+            )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         assert x.shape[1] == self.channels
@@ -142,9 +145,9 @@ class Upsample(nn.Module):
                 (
                     t_factor * x.shape[2],
                     x.shape[3] * self.scale_factor,
-                    x.shape[4] * self.scale_factor
+                    x.shape[4] * self.scale_factor,
                 ),
-                mode="nearest"
+                mode="nearest",
             )
         else:
             x = F.interpolate(x, scale_factor=self.scale_factor, mode="nearest")
@@ -154,22 +157,22 @@ class Upsample(nn.Module):
 
 
 class Downsample(nn.Module):
-    """
-    A downsampling layer with an optional convolution.
+    """A downsampling layer with an optional convolution.
 
     :param channels: channels in the inputs and outputs.
     :param use_conv: a bool determining if a convolution is applied.
-    :param dims: determines if the signal is 1D, 2D, or 3D. If 3D, then downsampling occurs in the inner-two dimensions.
+    :param dims: determines if the signal is 1D, 2D, or 3D. If 3D, then downsampling occurs in the
+        inner-two dimensions.
     """
 
     def __init__(
-            self,
-            channels: int,
-            use_conv: bool,
-            dims: int = 2,
-            out_channels: Optional[int] = None,
-            padding: int = 1,
-            third_down: bool = False
+        self,
+        channels: int,
+        use_conv: bool,
+        dims: int = 2,
+        out_channels: Optional[int] = None,
+        padding: int = 1,
+        third_down: bool = False,
     ):
         super().__init__()
         self.channels = channels
@@ -183,7 +186,9 @@ class Downsample(nn.Module):
                 f"Settings are: \n in-chn: {self.channels}, out-chn: {self.out_channels}, "
                 f"kernel-size: 3, stride: {stride}, padding: {padding}"
             )
-            self.op = conv_nd(dims, self.channels, self.out_channels, 3, stride=stride, padding=padding)
+            self.op = conv_nd(
+                dims, self.channels, self.out_channels, 3, stride=stride, padding=padding
+            )
         else:
             assert self.channels == self.out_channels
             self.op = avg_pool_nd(dims, kernel_size=stride, stride=stride)
@@ -194,16 +199,14 @@ class Downsample(nn.Module):
 
 
 class ResBlock(TimestepBlock):
-    """
-    A residual block that can optionally change the number of channels.
+    """A residual block that can optionally change the number of channels.
 
     :param channels: the number of input channels.
     :param emb_channels: the number of timestep embedding channels.
     :param dropout: the rate of dropout.
     :param out_channels: if specified, the number of out channels.
-    :param use_conv: if True and out_channels is specified, use a spatial
-        convolution instead of a smaller 1x1 convolution to change the
-        channels in the skip connection.
+    :param use_conv: if True and out_channels is specified, use a spatial convolution instead of a
+        smaller 1x1 convolution to change the channels in the skip connection.
     :param dims: determines if the signal is 1D, 2D, or 3D.
     :param use_checkpoint: if True, use gradient checkpointing on this module.
     :param up: if True, use this block for upsampling.
@@ -211,21 +214,21 @@ class ResBlock(TimestepBlock):
     """
 
     def __init__(
-            self,
-            channels: int,
-            emb_channels: int,
-            dropout: float,
-            out_channels: Optional[int] = None,
-            use_conv: bool = False,
-            use_scale_shift_norm: bool = False,
-            dims: int = 2,
-            use_checkpoint: bool = False,
-            up: bool = False,
-            down: bool = False,
-            kernel_size: int = 3,
-            exchange_temb_dims: bool = False,
-            skip_t_emb: bool = False,
-            causal: bool = False
+        self,
+        channels: int,
+        emb_channels: int,
+        dropout: float,
+        out_channels: Optional[int] = None,
+        use_conv: bool = False,
+        use_scale_shift_norm: bool = False,
+        dims: int = 2,
+        use_checkpoint: bool = False,
+        up: bool = False,
+        down: bool = False,
+        kernel_size: int = 3,
+        exchange_temb_dims: bool = False,
+        skip_t_emb: bool = False,
+        causal: bool = False,
     ):
         super().__init__()
         self.channels = channels
@@ -245,7 +248,9 @@ class ResBlock(TimestepBlock):
         self.in_layers = nn.Sequential(
             normalization(channels),
             nn.SiLU(),
-            conv_nd(dims, channels, self.out_channels, kernel_size, padding=padding, causal=causal)
+            conv_nd(
+                dims, channels, self.out_channels, kernel_size, padding=padding, causal=causal
+            ),
         )
 
         self.updown = up or down
@@ -269,30 +274,35 @@ class ResBlock(TimestepBlock):
             self.emb_layers = None
             self.exchange_temb_dims = False
         else:
-            self.emb_layers = nn.Sequential(
-                nn.SiLU(),
-                linear(emb_channels, self.emb_out_channels)
-            )
+            self.emb_layers = nn.Sequential(nn.SiLU(), linear(emb_channels, self.emb_out_channels))
 
         self.out_layers = nn.Sequential(
             normalization(self.out_channels),
             nn.SiLU(),
             nn.Dropout(p=dropout),
             zero_module(
-                conv_nd(dims, self.out_channels, self.out_channels, kernel_size, padding=padding, causal=causal)
-            )
+                conv_nd(
+                    dims,
+                    self.out_channels,
+                    self.out_channels,
+                    kernel_size,
+                    padding=padding,
+                    causal=causal,
+                )
+            ),
         )
 
         if self.out_channels == channels:
             self.skip_connection = nn.Identity()
         elif use_conv:
-            self.skip_connection = conv_nd(dims, channels, self.out_channels, kernel_size, padding=padding)
+            self.skip_connection = conv_nd(
+                dims, channels, self.out_channels, kernel_size, padding=padding
+            )
         else:
             self.skip_connection = conv_nd(dims, channels, self.out_channels, 1)
 
     def forward(self, x: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
-        """
-        Apply the block to a Tensor, conditioned on a timestep embedding.
+        """Apply the block to a Tensor, conditioned on a timestep embedding.
 
         :param x: an [N x C x ...] Tensor of features.
         :param emb: an [N x emb_channels] Tensor of timestep embeddings.

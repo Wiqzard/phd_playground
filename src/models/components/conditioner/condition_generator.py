@@ -1,11 +1,12 @@
-from torch import nn
-from typing import List, Tuple, Dict, Any, Optional
-from einops import rearrange
-import torch
-from .dino_features_provider import DINOFeaturesProvider
+from typing import Any, Dict, List, Optional, Tuple
+
 import numpy as np
+import torch
+from einops import rearrange
+from torch import nn
 
 from ..utils import posemb_sincos_1d
+from .dino_features_provider import DINOFeaturesProvider
 
 
 class ConditionGenerator(nn.Module):
@@ -39,9 +40,7 @@ class ConditionGenerator(nn.Module):
                 torch.randn(self.dino_provider.num_condition_tokens, 1024),
                 requires_grad=True,
             )
-            self.cond_pos_emb = posemb_sincos_1d(
-                self.dino_provider.num_pos_emb_tokens, 1024
-            )
+            self.cond_pos_emb = posemb_sincos_1d(self.dino_provider.num_pos_emb_tokens, 1024)
 
     def drop_pixels(
         self, pixel_values: torch.Tensor, patches_xy: torch.Tensor
@@ -63,8 +62,8 @@ class ConditionGenerator(nn.Module):
         return pixel_values
 
     def create_random_mask(self, cond_feats: torch.Tensor) -> torch.Tensor:
-        """
-        Last step.
+        """Last step.
+
         Given the cond_feats, apply token dropout and return the mask.
         Args:
             cond_feats (torch.Tensor): [b T c]
@@ -97,20 +96,14 @@ class ConditionGenerator(nn.Module):
         cond_feats = self.dino_provider.group_tokens(cond_feats)
         if return_grouped_tokens:
             grouped_tokens = cond_feats.clone()
-        patches_to_pick, patches_xy = self.dino_provider.get_patches_to_select(
-            cond_feats
-        )
+        patches_to_pick, patches_xy = self.dino_provider.get_patches_to_select(cond_feats)
 
         cond_feats = self.cond_projection(cond_feats)
-        cond_feats = cond_feats.view(
-            b, l, h // 2, w // 2, self.dino_provider.proj_channels * 4
-        )
+        cond_feats = cond_feats.view(b, l, h // 2, w // 2, self.dino_provider.proj_channels * 4)
         cond_feats = rearrange(cond_feats, "b l h w c -> b (l h w) c")
         cond_feats = cond_feats + self.cond_pos_emb.to(cond_feats.device).unsqueeze(0)
 
-        cond_feats = rearrange(
-            cond_feats, "b (l h w) c -> b l c h w", l=l, h=h // 2, w=w // 2
-        )
+        cond_feats = rearrange(cond_feats, "b (l h w) c -> b l c h w", l=l, h=h // 2, w=w // 2)
         cond_feats = self.dino_provider.pick_patches(cond_feats, patches_to_pick)
 
         if enable_pixels_dropout:
@@ -163,8 +156,8 @@ class ConditionGenerator(nn.Module):
         return_grouped_tokens: bool = False,
         force_cond_feats: torch.Tensor = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Forward pass of the ConditionGenerator model that generates condition features for the given pixel values.
+        """Forward pass of the ConditionGenerator model that generates condition features for the
+        given pixel values.
 
         Args:
             pixel_values (torch.Tensor): [ B 3 H W ]

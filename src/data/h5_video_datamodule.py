@@ -6,9 +6,9 @@ from typing import Any, Dict, Optional
 import h5py
 import numpy as np
 import torch
-from torch.utils.data import Dataset, DataLoader
-from torchvision import transforms as T
 from lightning import LightningDataModule
+from torch.utils.data import DataLoader, Dataset
+from torchvision import transforms as T
 
 
 class H5VideoDataset(Dataset):
@@ -25,8 +25,9 @@ class H5VideoDataset(Dataset):
 
     @staticmethod
     def check_shard_lengths(file_paths):
-        """
-        Filter away the last shard, which is assumed to be smaller. this double checks that all other shards have the
+        """Filter away the last shard, which is assumed to be smaller.
+
+        this double checks that all other shards have the
         same number of entries.
         :param file_paths: list of .hdf5 files
         :return: tuple (ps, num_per_shard) where
@@ -106,16 +107,12 @@ class H5VideoDataset(Dataset):
     def __getitem__(self, index):
         idx = index % self.total_num
         shard_idx, idx_in_shard = self.get_indices(idx)
-        pixel_values = torch.empty(
-            (self.sample_frames, self.channels, self.height, self.width)
-        )
+        pixel_values = torch.empty((self.sample_frames, self.channels, self.height, self.width))
 
         # Read from shard
         with h5py.File(self.shard_paths[shard_idx], "r") as f:
             num_frames = len(f[idx_in_shard])
-            start_idx = random.randint(
-                0, num_frames - self.sample_frames * (self.skip_frames + 1)
-            )
+            start_idx = random.randint(0, num_frames - self.sample_frames * (self.skip_frames + 1))
 
             # Adjusted loop to prevent index errors
             frame_indices = range(

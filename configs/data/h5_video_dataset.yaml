@@ -10,4 +10,3 @@ total_videos: -1
 batch_size: 2
 num_workers: 15
 pin_memory: False
-
