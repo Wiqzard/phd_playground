@@ -27,6 +27,11 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+*.pth
+img_align_celeba
+MNIST
+wandb
+lightning_logs
 
 # PyInstaller
 #  Usually these files are written by a python script from a template

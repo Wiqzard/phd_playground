@@ -1,0 +1,5 @@
+_target_: src.data.memory_maze.MemoryMazeDataModule
+base_folder: ${paths.data_dir}
+num_frames: 2
+batch_size: 32 
+num_workers: 16

@@ -1,0 +1,157 @@
+# @package _global_
+
+defaults:
+  - override /data: memory 
+  - override /model: ddpm_video
+  - override /callbacks: default
+  - override /trainer: gpu
+  #- override /trainer:  ddp 
+  - override /logger: wandb
+  - override /paths: default
+  #- override /debug: overfit
+
+# all parameters below will be merged with parameters from default configurations set above
+# this allows you to overwrite only specified parameters
+
+tags: ["ddpm", "debug", "memory_maze"]
+
+seed: 42 
+test: False
+
+
+trainer:
+  detect_anomaly: False #True #True
+  strategy: ddp_find_unused_parameters_true
+  inference_mode: False
+  min_epochs: 10
+  max_epochs: 1000
+  gradient_clip_val: 1 
+  val_check_interval: 10 #500 #00 #0 #500 
+  
+
+  check_val_every_n_epoch:  #5
+  #limit_train_batches: 1
+  limit_val_batches: 20
+  
+
+  log_every_n_steps: 1
+  num_sanity_val_steps: 1
+  
+  #overfit_batches: 1
+  precision: #bf16-mixed #null #fp32 #bf16-mixed
+  ###
+  ###
+  ###
+  ###
+  ###
+
+#paths:
+#  data_dir: /data/cvg/sebastian/memory_maze/memory-maze-9x9 
+  
+#ckpt_path: logs/train/runs/2025-02-21_22-04-15/checkpoints/last.ckpt  # null
+
+model:
+  ckpt_path: #logs/train/runs/2025-03-16_19-48-49/checkpoints/last.ckpt #null #logs/train/runs/2025-02-21_22-04-15/checkpoints/last.ckpt  # null
+  lora_finetune: False 
+  compile_model:  False #true_without_ddp_optimizer # True
+  num_inference_steps: 10
+  batch_size: ${data.batch_size}
+
+  data_mean: 0.5
+  data_std: 0.5
+
+  # VAE Configuration
+  is_latent_diffusion: False
+  is_latent_online: False
+  latent_downsampling_factor: [1, 1]
+
+
+  # Metrics Configuration
+  metrics: [fvd, is, fid, lpips, mse, psnr, ssim]
+  metrics_batch_size: 16
+
+  # Checkpoint
+  strict_load: False
+
+  # Logging Configuration
+  log_grad_norm_freq: 100 #${trainer.log_every_n_steps}
+  log_deterministic: False
+  log_sanity_generation: True #False
+  log_max_num_videos: 32
+
+  # Generation Configuration
+  reconstruction_guidance: 0.0
+  sliding_context_len: 2
+  sampling_timesteps: 5
+  use_causal_mask: False
+  chunk_size: 1
+  clip_noise: 20 
+  scheduling_matrix: full_sequence
+
+  # General Configuration
+  x_shape: ${data.observation_shape}
+  n_frames: ${data.n_frames}
+  max_frames: ${data.max_frames}
+  context_frames: ${data.context_length}
+
+  # put these into data maybe?
+  external_cond_processing: null 
+  external_cond_dim: 0
+  
+
+
+  # Tasks
+  tasks: [prediction,] #, interpolation]
+
+  model:
+    _target_: insert_memory.DiT3D #TTT #src.models.components.dit.DiT # _S_4
+    in_channels: 6 #8
+    out_channels: 3 #4
+    input_size: 64 #16 #64
+    num_classes: 1
+    depth: 12 #12
+    hidden_size: 192 #384 #192 #384
+    num_heads: 6
+    patch_size: 4
+    # memory settings
+    batch_size: 256 #32 #64 #128 # actual splitting
+    chunk_size: 256 
+
+  optimizer:
+    _target_: torch.optim.AdamW
+    _partial_: true
+    lr: 0.0002 #0.0001
+
+  lr_scheduler:
+    _target_: torch.optim.lr_scheduler.LinearLR
+    _partial_: true
+    start_factor: 1 
+    end_factor: 0.1
+    total_iters: ${trainer.max_epochs}
+
+callbacks:
+  early_stopping:
+    monitor: "val/loss"
+    patience: 10000
+    mode: "min"
+
+  model_checkpoint:
+    #monitor: "train/outer_loss"
+    #monitor: "train/loss"
+    monitor: "val/loss"
+    mode: "min"
+  
+data:
+  batch_size: 16 #8 #16 #32 #1 #32 #32 #64 
+  num_workers: 32 #16
+  n_frames: 5 #5 #25 #5
+  max_frames: 5 #5 # 25 #5
+  context_length: 1 #5 #25 #5
+  latent_downsampling_factor: [1, 1]
+
+logger:
+  wandb:
+    tags: ${tags}
+    group: "ddpm_memory_maze"
+  aim:
+    experiment: "ddpm_memory_maze"
