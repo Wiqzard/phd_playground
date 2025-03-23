@@ -106,6 +106,7 @@ class ContinuousDiffusion(DiscreteDiffusion):
         ), "ContinuousDiffusion only supports 'pred_v' objective and 'sigmoid' loss weighting"
         self.precond_scale = cfg.precond_scale
         self.sigmoid_bias = cfg.loss_weighting.sigmoid_bias
+        self.is_discrete = False
 
     def _build_buffer(self):
         super()._build_buffer()

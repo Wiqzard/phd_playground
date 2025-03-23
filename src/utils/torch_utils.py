@@ -15,3 +15,15 @@ def unfreeze_model(model: nn.Module) -> None:
     model.train()
     for param in model.parameters():
         param.requires_grad = True
+
+def bernoulli_tensor(
+    size: _size,
+    p: float,
+    device: Optional[torch.device] = None,
+    generator: Optional[torch.Generator] = None,
+):
+    """
+    Generate a tensor of the given size,
+    where each element is sampled from a Bernoulli distribution with probability `p`.
+    """
+    return torch.bernoulli(torch.full(size, p, device=device), generator=generator)

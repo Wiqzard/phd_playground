@@ -32,6 +32,7 @@ img_align_celeba
 MNIST
 wandb
 lightning_logs
+huggingface
 
 # PyInstaller
 #  Usually these files are written by a python script from a template

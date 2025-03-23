@@ -110,6 +110,7 @@ def log_video(
     logger=None,
     n_frames=None,
     raw_dir=None,
+    fps=2
 ):
     """
     take in video tensors in range [-1, 1] and log into wandb
@@ -193,7 +194,7 @@ def log_video(
         caption = captions[i] if i < len(captions) else None
         logger.log(
             {
-                name: wandb.Video(video[i], fps=24, caption=caption),
+                name: wandb.Video(video[i], fps=fps, caption=caption),
                 "trainer/global_step": step,
             }
         )

@@ -1,4 +1,4 @@
-from typing import Optional, Callable, Literal
+from typing import Optional, Callable, Literal, Dict
 from collections import namedtuple
 from omegaconf import DictConfig
 import torch
@@ -31,52 +31,48 @@ ModelPrediction = namedtuple(
 class DiscreteDiffusion(nn.Module):
     def __init__(
         self,
-        cfg: DictConfig,
-        backbone_cfg: DictConfig,
+        model: nn.Module,
         x_shape: torch.Size,
         max_tokens: int,
         external_cond_dim: int,
+        timesteps: int = 1000,
+        sampling_timesteps: int = 50,
+        beta_schedule: str = "cosine",
+        schedule_fn_kwargs: Dict = {},
+        objective: str = "v_pred",
+        loss_weighting: Dict = {},
+        ddim_sampling_eta: float = 0.0,
+        clip_noise: float = 20.0,
+        use_causal_mask: bool = False,
+        reconstruction_guidance: Optional[Callable] = None,
     ):
         super().__init__()
-        self.cfg = cfg
+        self.model = model
         self.x_shape = x_shape
         self.max_tokens = max_tokens
         self.external_cond_dim = external_cond_dim
-        self.timesteps = cfg.timesteps
-        self.sampling_timesteps = cfg.sampling_timesteps
-        self.beta_schedule = cfg.beta_schedule
-        self.schedule_fn_kwargs = cfg.schedule_fn_kwargs
-        self.objective = cfg.objective
-        self.loss_weighting = cfg.loss_weighting
-        self.ddim_sampling_eta = cfg.ddim_sampling_eta
-        self.clip_noise = cfg.clip_noise
-
-        self.backbone_cfg = backbone_cfg
-        self.use_causal_mask = cfg.use_causal_mask
-        self._build_model()
+        self.timesteps = timesteps
+        self.sampling_timesteps = sampling_timesteps
+        self.beta_schedule = beta_schedule
+        self.schedule_fn_kwargs = schedule_fn_kwargs
+        self.objective = objective
+        self.loss_weighting = loss_weighting
+        self.ddim_sampling_eta = ddim_sampling_eta
+        self.clip_noise = clip_noise
+        self.use_causal_mask = use_causal_mask
+        self.reconstruction_guidance = reconstruction_guidance
+        self.is_discrete = True
+        if loss_weighting == {}:
+            self.loss_weighting = {
+                "strategy": "fused_min_snr",
+                "snr_clip": 5,
+                "cum_snr_decay": 0.9,
+            }
+        if schedule_fn_kwargs == {}:
+            self.schedule_fn_kwargs = {
+                "shift": 1.0,
+            }
         self._build_buffer()
-
-    def _build_model(self):
-        match self.backbone_cfg.name:
-            case "u_net3d":
-                model_cls = Unet3D
-            case "u_vit3d":
-                model_cls = UViT3D
-            case "u_vit3d_pose":
-                model_cls = UViT3DPose
-            case "dit3d":
-                model_cls = DiT3D
-            case "dit3d_pose":
-                model_cls = DiT3DPose
-            case _:
-                raise ValueError(f"unknown model type {self.model_type}")
-        self.model = model_cls(
-            cfg=self.backbone_cfg,
-            x_shape=self.x_shape,
-            max_tokens=self.max_tokens,
-            external_cond_dim=self.external_cond_dim,
-            use_causal_mask=self.use_causal_mask,
-        )
 
     def _build_buffer(self):
         betas = make_beta_schedule(
@@ -112,7 +108,7 @@ class DiscreteDiffusion(nn.Module):
         register_buffer("log_one_minus_alphas_cumprod", torch.log(1.0 - alphas_cumprod))
         # if (
         #     self.objective == "pred_noise"
-        #     or self.cfg.reconstruction_guidance is not None
+        #     or self.reconstruction_guidance is not None
         # ):
         register_buffer("sqrt_recip_alphas_cumprod", torch.sqrt(1.0 / alphas_cumprod))
         register_buffer(
@@ -157,8 +153,8 @@ class DiscreteDiffusion(nn.Module):
     def add_shape_channels(self, x):
         return rearrange(x, f"... -> ...{' 1' * len(self.x_shape)}")
 
-    def model_predictions(self, x, k, external_cond=None, external_cond_mask=None):
-        model_output = self.model(x, k, external_cond, external_cond_mask)
+    def model_predictions(self, x, k, external_cond=None, external_cond_mask=None, **kwargs):
+        model_output, *other_output = self.model(x, k, external_cond, external_cond_mask, **kwargs)
 
         if self.objective == "pred_noise":
             pred_noise = torch.clamp(model_output, -self.clip_noise, self.clip_noise)
@@ -175,7 +171,7 @@ class DiscreteDiffusion(nn.Module):
 
         model_pred = ModelPrediction(pred_noise, x_start, model_output)
 
-        return model_pred
+        return model_pred, other_output
 
     def predict_start_from_noise(self, x_k, k, noise):
         return (
@@ -258,7 +254,7 @@ class DiscreteDiffusion(nn.Module):
                 # sigmoid reweighting proposed by https://arxiv.org/abs/2303.00848
                 # and adopted by https://arxiv.org/abs/2410.19324
                 epsilon_weighting = torch.sigmoid(
-                    self.cfg.loss_weighting.sigmoid_bias - logsnr
+                    self.loss_weighting.sigmoid_bias - logsnr
                 )
             case "min_snr":
                 # min-SNR reweighting proposed by https://arxiv.org/abs/2303.09556
@@ -324,17 +320,26 @@ class DiscreteDiffusion(nn.Module):
         x: torch.Tensor,
         external_cond: Optional[torch.Tensor],
         k: torch.Tensor,
+        context_frame_mask: Optional[torch.Tensor] = None,
+        **kwargs, 
     ):
         noise = torch.randn_like(x)
         noise = torch.clamp(noise, -self.clip_noise, self.clip_noise)
 
         noised_x = self.q_sample(x_start=x, k=k, noise=noise)
-        model_pred = self.model_predictions(
-            x=noised_x, k=k, external_cond=external_cond
+
+        if context_frame_mask is not None:
+            context_frames = x * ( 1 - context_frame_mask[..., None, None, None].int())
+            noised_x = torch.cat([noised_x, context_frames], dim=2)
+        model_pred, *aux_output = self.model_predictions(
+            x=noised_x, k=k, external_cond=external_cond, **kwargs
         )
 
         pred = model_pred.model_out
         x_pred = model_pred.pred_x_start
+        if context_frame_mask is not None:
+            pred = pred[:, :, :3]
+            x_pred = x_pred[:, :, :3]
 
         if self.objective == "pred_noise":
             target = noise
@@ -351,7 +356,7 @@ class DiscreteDiffusion(nn.Module):
         loss_weight = self.add_shape_channels(loss_weight)
         loss = loss * loss_weight
 
-        return x_pred, loss
+        return x_pred, loss, None
 
     def ddim_idx_to_noise_level(self, indices: torch.Tensor):
         shape = indices.shape
@@ -368,6 +373,7 @@ class DiscreteDiffusion(nn.Module):
         external_cond: Optional[torch.Tensor],
         external_cond_mask: Optional[torch.Tensor] = None,
         guidance_fn: Optional[Callable] = None,
+        context_frames: Optional[torch.Tensor] = None,
     ):
         if self.is_ddim_sampling:
             return self.ddim_sample_step(
@@ -377,6 +383,7 @@ class DiscreteDiffusion(nn.Module):
                 external_cond=external_cond,
                 external_cond_mask=external_cond_mask,
                 guidance_fn=guidance_fn,
+                context_frames=context_frames,
             )
 
         # FIXME: temporary code for checking ddpm sampling
@@ -436,6 +443,7 @@ class DiscreteDiffusion(nn.Module):
         external_cond: Optional[torch.Tensor],
         external_cond_mask: Optional[torch.Tensor] = None,
         guidance_fn: Optional[Callable] = None,
+        context_frames: Optional[torch.Tensor] = None,
     ):
 
         clipped_curr_noise_level = torch.clamp(curr_noise_level, min=0)
@@ -490,7 +498,7 @@ class DiscreteDiffusion(nn.Module):
                 )
 
         else:
-            model_pred = self.model_predictions(
+            model_pred, *aux_output = self.model_predictions(
                 x=x,
                 k=clipped_curr_noise_level,
                 external_cond=external_cond,
@@ -512,7 +520,7 @@ class DiscreteDiffusion(nn.Module):
             x_pred,
         )
 
-        return x_pred
+        return x_pred, aux_output
 
     def estimate_noise_level(self, x, mu=None):
         # x ~ ( B, T, C, ...)

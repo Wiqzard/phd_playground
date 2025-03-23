@@ -3,7 +3,10 @@ from types import SimpleNamespace
 import torch
 import torch.nn as nn
 
-from einops import rearrange
+from torch.utils.checkpoint import checkpoint
+from typing import Literal, Optional, Tuple, Callable, Union
+from timm.models.vision_transformer import PatchEmbed
+from einops import repeat, rearrange
 
 from titans.titans_pytorch.neural_memory import NeuralMemory
 from titans.titans_pytorch.memory_models import MemoryMLP
@@ -14,14 +17,9 @@ from titans.titans_pytorch.ttt_custom import TTTConfig, TTTLinear, TTTMLP, Block
 # from src.models.components.dit import DiT, modulate
 from src.models.components.transformer.dit import DiT, modulate
 
-
-# from src.models.components.dit3d import DiT3D
-
-# class PassthroughMemory(nn.Identity):
-# """A wrapper around Identity to match NeuralMemory's API."""
-# def forward(self, x, memory_state):
-# return x, memory_state  # Ensures consistency with NeuralMemory's API
-
+from src.models.components.transformer.dit3d_base import DiT3D, BaseBackbone
+from src.models.components.transformer.ditv2 import DiTBase, DiTBlock, DITFinalLayer, RotaryEmbedding3D, Variant, PosEmb, SinusoidalPositionalEmbedding
+from src.models.components.transformer.ditv2_blocks import AdaLayerNormZero
 
 def exists(v):
     return v is not None
@@ -195,16 +193,344 @@ class DiT3D(DiT):
 
         return x
 
-    #def prepare_inputs_for_generation(self, input_ids, **kwargs):
-    #    # Dummy implementation for compatibility with PEFT
-    #    return {"input_ids": input_ids}
-
-
-from src.models.components.transformer.dit3d_base import DiT3D, BaseBackbone
-from src.models.components.transformer.ditv2 import DiTBase
 
 class MemoryDiT3D(BaseBackbone):
-    
+    def __init__(
+        self,
+        x_shape: torch.Size,
+        max_tokens: int,
+        external_cond_dim: int,
+        hidden_size: int,
+        patch_size: int,
+        cat_conditioning: bool = False,
+        variant: str = "full",
+        pos_emb_type: str = "learned_1d",
+        depth: int = 28,
+        num_heads: int = 16,
+        mlp_ratio: float = 4.0,
+        use_gradient_checkpointing: bool = False,
+        use_fourier_noise_embedding: bool = False,
+        external_cond_dropout: float = 0.0,
+        learn_sigma: bool = False,
+        chunk_size: int = 16,
+        batch_size: int = 16,
+        depth_memory: int = 2,
+        memory_layer_indices: list = [1, 3, 5, 9],
+        momentum: bool = True,
+    ):
+
+        self.hidden_size = hidden_size
+        self.patch_size = patch_size
+
+        super().__init__(
+            x_shape=x_shape,
+            max_tokens=max_tokens,
+            external_cond_dim=external_cond_dim,
+            noise_level_emb_dim=hidden_size,  # e.g. same as hidden_size
+            use_fourier_noise_embedding=use_fourier_noise_embedding,
+            external_cond_dropout=external_cond_dropout,
+        )
+
+        channels, resolution, *_ = x_shape
+        self.cat_conditioning = cat_conditioning
+        if cat_conditioning:
+            channels  = channels * 2
+        assert (
+            resolution % self.patch_size == 0
+        ), "Resolution must be divisible by patch size."
+
+        self.num_patches = (resolution // self.patch_size) ** 2
+        out_channels = self.patch_size**2 * channels
+
+        self.patch_embedder = PatchEmbed(
+            img_size=resolution,
+            patch_size=self.patch_size,
+            in_chans=self.in_channels,
+            embed_dim=self.hidden_size,
+            bias=True,
+        )
+
+
+        self._check_args(self.num_patches, variant, pos_emb_type)
+        self.learn_sigma = learn_sigma
+        self.out_channels = out_channels * (2 if learn_sigma else 1)
+        self.max_temporal_length = max_tokens 
+        self.max_tokens = self.max_temporal_length * (self.num_patches or 1)
+        self.hidden_size = hidden_size
+        self.depth = depth
+        self.mlp_ratio = mlp_ratio
+        self.variant = variant
+        self.pos_emb_type = pos_emb_type
+        self.use_gradient_checkpointing = use_gradient_checkpointing
+
+        match self.pos_emb_type:
+            case "learned_1d":
+                self.pos_emb = SinusoidalPositionalEmbedding(
+                    embed_dim=self.hidden_size,
+                    shape=(self.max_tokens,),
+                    learnable=True,
+                )
+            case "sinusoidal_1d":
+                self.pos_emb = SinusoidalPositionalEmbedding(
+                    embed_dim=self.hidden_size,
+                    shape=(self.max_tokens,),
+                )
+
+            case "sinusoidal_3d":
+                self.pos_emb = SinusoidalPositionalEmbedding(
+                    embed_dim=self.hidden_size,
+                    shape=(
+                        self.max_temporal_length,
+                        self.spatial_grid_size,
+                        self.spatial_grid_size,
+                    ),
+                )
+            case "sinusoidal_factorized":
+                self.spatial_pos_emb = SinusoidalPositionalEmbedding(
+                    embed_dim=self.hidden_size,
+                    shape=(self.spatial_grid_size, self.spatial_grid_size),
+                )
+                self.temporal_pos_emb = SinusoidalPositionalEmbedding(
+                    embed_dim=self.hidden_size,
+                    shape=(self.max_temporal_length,),
+                )
+            case "rope_3d":
+                rope = RotaryEmbedding3D(
+                    dim=self.hidden_size // num_heads,
+                    sizes=(
+                        self.max_temporal_length,
+                        self.spatial_grid_size,
+                        self.spatial_grid_size,
+                    ),
+                )
+
+        self.blocks = nn.ModuleList(
+            [
+                DiTBlock(
+                    hidden_size=hidden_size,
+                    num_heads=num_heads,
+                    mlp_ratio=(
+                        mlp_ratio if self.variant != "factorized_attention" else None
+                    ),
+                    rope=rope if self.pos_emb_type == "rope_3d" else None,
+                )
+                for _ in range(depth)
+            ]
+        )
+
+        assert (
+            max(memory_layer_indices) < depth  
+        ), f"Memory slots must be less than the depth of the model ({depth}) but got {memory_slots}"
+
+        self.memory_layer_indices = memory_layer_indices
+        self.memory_layers = torch.nn.ModuleList([])
+        for i in range(depth):
+            if i in memory_layer_indices:
+                memory_layer = torch.nn.ModuleList(
+                    [
+                        NeuralMemory(
+                            dim=hidden_size,
+                            momentum=momentum,
+                            chunk_size=chunk_size,
+                            batch_size=batch_size,
+                            model=MemoryMLP(dim=hidden_size, depth=depth_memory),
+                            qkv_receives_diff_views=False,
+                            use_accelerated_scan=False,
+                            default_step_transform_max_lr=1e-1,
+                        ),
+                        AdaLayerNormZero(hidden_size)
+                    ]
+                )
+                self.memory_layers.append(memory_layer)
+            else:
+                self.memory_layers.append(torch.nn.Identity())
+
+        self.final_layer = DITFinalLayer(hidden_size, self.out_channels)
+
+        self.initialize_weights()
+
+    @property
+    def is_factorized(self) -> bool:
+        return self.variant in {"factorized_encoder", "factorized_attention"}
+
+    @property
+    def is_pos_emb_absolute_once(self) -> bool:
+        return self.pos_emb_type in {"learned_1d", "sinusoidal_1d", "sinusoidal_3d"}
+
+    @property
+    def is_pos_emb_absolute_factorized(self) -> bool:
+        return self.pos_emb_type == "sinusoidal_factorized"
+
+    @property
+    def spatial_grid_size(self) -> Optional[int]:
+        if self.num_patches is None:
+            return None
+        grid_size = int(self.num_patches**0.5)
+        assert (
+            grid_size * grid_size == self.num_patches
+        ), "num_patches must be a square number"
+        return grid_size
+
+    @staticmethod
+    def _check_args(num_patches: Optional[int], variant: Variant, pos_emb_type: PosEmb):
+        if variant not in {"full", "factorized_encoder", "factorized_attention"}:
+            raise ValueError(f"Unknown variant {variant}")
+        if pos_emb_type not in {
+            "learned_1d",
+            "sinusoidal_1d",
+            "sinusoidal_3d",
+            "sinusoidal_factorized",
+            "rope_3d",
+        }:
+            raise ValueError(f"Unknown positional embedding type {pos_emb_type}")
+        if num_patches is None:
+            assert (
+                variant == "full"
+            ), "For 1D inputs, factorized variants are not supported"
+            assert pos_emb_type in {
+                "learned_1d",
+                "sinusoidal_1d",
+            }, "For 1D inputs, only 1D positional embeddings are supported"
+
+        if pos_emb_type == "rope_3d":
+            assert variant == "full", "Rope3D is only supported with full variant"
+
+    def checkpoint(self, module: nn.Module, *args):
+        if self.use_gradient_checkpointing:
+            return checkpoint(module, *args, use_reentrant=False)
+        return module(*args)
+
+    def _dit_forward(self, x: torch.Tensor, c: torch.Tensor, cache_params=None) -> torch.Tensor:
+        memory_states = default(cache_params, [])
+        aux_output = None
+
+        if x.size(1) > self.max_tokens:
+            raise ValueError(
+                f"Input sequence length {x.size(1)} exceeds the maximum length {self.max_tokens}"
+            )
+        batch_size = x.size(0)
+        # 1) Absolute positional embeddings if needed
+        if self.is_pos_emb_absolute_once:
+            x = self.pos_emb(x)
+
+        # 2) Factorized absolute positional embeddings (non-factorized case)
+        if self.is_pos_emb_absolute_factorized and not self.is_factorized:
+            # Factor out space, then time, then refold:
+            # (b (t p) c) -> (b t) p c -> (b p) t c -> ...
+            def add_pos_emb(x: torch.Tensor, batch_size: int) -> torch.Tensor:
+                x = rearrange(x, "b (t p) c -> (b t) p c", p=self.num_patches)
+                x = self.spatial_pos_emb(x)
+                x = rearrange(x, "(b t) p c -> (b p) t c", b=batch_size)
+                x = self.temporal_pos_emb(x)
+                x = rearrange(x, "(b p) t c -> b (t p) c", b=batch_size)
+                return x
+
+            x = add_pos_emb(x, batch_size)
+
+
+        neural_mem_caches = iter(default(memory_states, []))
+        next_neural_mem_caches = []
+        for i, (block, memory_layer) in enumerate(
+            zip(self.blocks, self.memory_layers or [None for _ in range(self.depth)])
+        ):
+            x = self.checkpoint(block, x, c)
+
+            if i in self.memory_layer_indices:
+                memory_layer, norm = memory_layer
+                retrieved, memory_state, aux_output = memory_layer(
+                    x, state=next(neural_mem_caches, None), return_surprises=True
+                )
+                # memory_state)
+                if torch.isnan(retrieved).any():
+                    print("retrieved has nan")
+                next_neural_mem_caches.append(memory_state)
+                x, gate_memory = norm(x, c)
+                x = x + retrieved * gate_memory
+
+        x = self.final_layer(x, c)
+
+        return x, next_neural_mem_caches, aux_output
+
+    @property
+    def in_channels(self) -> int:
+        return self.x_shape[0] if not self.cat_conditioning else self.x_shape[0] * 2
+
+    @staticmethod
+    def _patch_embedder_init(embedder: PatchEmbed) -> None:
+        # Initialize patch_embedder like nn.Linear (instead of nn.Conv2d):
+        w = embedder.proj.weight.data
+        nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
+        nn.init.zeros_(embedder.proj.bias)
+
+    def initialize_weights(self) -> None:
+        self._patch_embedder_init(self.patch_embedder)
+
+        # Initialize noise level embedding and external condition embedding MLPs:
+        def _mlp_init(module: nn.Module) -> None:
+            if isinstance(module, nn.Linear):
+                nn.init.normal_(module.weight, std=0.02)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+
+        self.noise_level_pos_embedding.apply(_mlp_init)
+        if self.external_cond_embedding is not None:
+            self.external_cond_embedding.apply(_mlp_init)
+
+    @property
+    def external_cond_emb_dim(self) -> int:
+        # If there's an external conditioning dimension, match hidden_size,
+        # otherwise 0
+        return self.hidden_size if self.external_cond_dim else 0
+
+    def unpatchify(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: patchified tensor of shape (B, num_patches, patch_size**2 * C)
+        Returns:
+            unpatchified tensor of shape (B, H, W, C)
+        """
+        return rearrange(
+            x,
+            "b (h w) (p q c) -> b (h p) (w q) c",
+            h=int(self.num_patches**0.5),
+            p=self.patch_size,
+            q=self.patch_size,
+        )
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        noise_levels: torch.Tensor,
+        external_cond: Optional[torch.Tensor] = None,
+        external_cond_mask: Optional[torch.Tensor] = None,
+        neural_memory_cache=None,
+        start_idx=0,
+    ) -> torch.Tensor:
+        input_batch_size = x.shape[0]
+        # Merge (B, T) into one dimension for patch embedding
+        x = rearrange(x, "b t c h w -> (b t) c h w")
+        x = self.patch_embedder(x)
+        x = rearrange(x, "(b t) p c -> b (t p) c", b=input_batch_size)
+
+        emb = self.noise_level_pos_embedding(noise_levels)
+
+        if external_cond is not None:
+            emb = emb + self.external_cond_embedding(external_cond, external_cond_mask)
+        emb = repeat(emb, "b t c -> b (t p) c", p=self.num_patches)
+
+        # Pass to DiTBase
+        x, neural_memory_cache, aux_output = self._dit_forward(x, emb, neural_memory_cache)  # (B, N, C)
+
+        # Unpatchify
+        x = self.unpatchify(
+            rearrange(x, "b (t p) c -> (b t) p c", p=self.num_patches)
+        )  # (B*T, H, W, C)
+
+        # Reshape back to (B, T, ...)
+        x = rearrange(
+            x, "(b t) h w c -> b t c h w", b=input_batch_size
+        )  # (B, T, C, H, W)
+        return x, neural_memory_cache, aux_output
 
 
 class DiT3DTTT(DiT):

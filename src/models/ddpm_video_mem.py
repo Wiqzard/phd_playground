@@ -1,4 +1,6 @@
 from typing import Any, Dict, Optional, Union, Sequence, Tuple, Callable, Literal
+from functools import partial
+import math
 
 import numpy as np
 import torch
@@ -16,21 +18,16 @@ from lightning.pytorch.utilities import grad_norm
 from einops import rearrange, repeat, reduce
 
 # Import the DDPM scheduler from diffusers
-#from src.models.components.moe_lora import inject_lora, disable_all_adapters, enable_all_adapters, set_lora_trainability, reset_all_lora_parameters, get_lora_adapter_parameters, get_lora_adapter_parameters, set_global_trainability , get_global_parameters
+# from src.models.components.moe_lora import inject_lora, disable_all_adapters, enable_all_adapters, set_lora_trainability, reset_all_lora_parameters, get_lora_adapter_parameters, get_lora_adapter_parameters, set_global_trainability , get_global_parameters
 from diffusers import DDPMScheduler
 from src.models.metrics.video import VideoMetric, SharedVideoMetricModelRegistry
 from src.models.common import BaseLightningTrainer
+from src.models.components.diffusion import DiscreteDiffusion, ContinuousDiffusion
 
 from utils.distributed_utils import rank_zero_print, is_rank_zero
 from utils.logging_utils import log_video
 from utils.print_utils import cyan
-from utils.torch_utils import freeze_model
-
-
-
-
-
-
+from utils.torch_utils import freeze_model, bernoulli_tensor
 
 ###############################################################################
 # Helper Function: Video Preprocessing for Logging (Optional)
@@ -61,18 +58,18 @@ def preprocess_and_format_video(x: torch.Tensor) -> any:
 # Diffusion Model Trainer using Diffusers DDPM Scheduler
 ###############################################################################
 
-#LightningModule
+
+# LightningModule
 class DiffusionModelTrainer(BaseLightningTrainer):
     def __init__(
         self,
-        model: torch.nn.Module,
+        #model: torch.nn.Module,
         optimizer: torch.optim.Optimizer,
         lr_scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
         num_train_timesteps: int = 1000,
         beta_schedule: str = "linear",
         scheduler: Optional[Any] = None,
         compile: bool = False,
-        num_inference_steps: int = 50,  # fewer steps for faster inference
         num_gen_steps: int = 10,
         meta_learning: bool = False,
         num_inner_steps: int = 10,
@@ -83,6 +80,7 @@ class DiffusionModelTrainer(BaseLightningTrainer):
         is_latent_online: bool = False,
         latent_downsampling_factor: Tuple[int, int, int] = (1, 1),
         x_shape: Tuple[int, int, int] = (3, 64, 64),
+        diffusion_model: Optional[Union[DiscreteDiffusion, ContinuousDiffusion]] = None,
         **kwargs,
     ) -> None:
         """
@@ -99,11 +97,12 @@ class DiffusionModelTrainer(BaseLightningTrainer):
             kwargs: Additional hyperparameters.
         """
         super().__init__()
-        self.save_hyperparameters(ignore=("model", "optimizer", "lr_scheduler", "scheduler"))
-        self.model = model
-        self.optimizer= optimizer
+        self.save_hyperparameters(ignore=("model", "diffusion_model", "optimizer", "lr_scheduler", "scheduler"))
+        #self.model = model
+        self.optimizer = optimizer
         self.lr_scheduler = lr_scheduler
         self.compile_model = compile
+        self.diffusion_model = diffusion_model
 
         # Initialize the DDPM scheduler for training
         if scheduler is not None:
@@ -112,19 +111,12 @@ class DiffusionModelTrainer(BaseLightningTrainer):
             )
         else:
             self.scheduler = scheduler
-        self.timesteps = num_train_timesteps
-
 
         self.temporal_downsampling_factor = latent_downsampling_factor[0]
 
-        
-        self.tasks = [
-            task
-            for task in self.hparams.tasks
-        ]
+        self.tasks = [task for task in self.hparams.tasks]
 
         self.num_logged_videos = 0
-
 
         # Metrics for logging
         self.train_loss = MeanMetric()
@@ -133,7 +125,6 @@ class DiffusionModelTrainer(BaseLightningTrainer):
 
         self.val_loss = MeanMetric()
         self.test_loss = MeanMetric()
-
 
     # ---------------------------------------------------------------------
     # Prepare Model, Optimizer, and Metrics
@@ -165,7 +156,6 @@ class DiffusionModelTrainer(BaseLightningTrainer):
         """
         return getattr(self, f"metrics_{task}", None)
 
-
     def configure_optimizers(self) -> Dict[str, Any]:
         """Choose what optimizers and learning-rate schedulers to use in your optimization.
         Normally you'd need one. But in the case of GANs or similar you might have multiple.
@@ -175,7 +165,7 @@ class DiffusionModelTrainer(BaseLightningTrainer):
 
         :return: A dict containing the configured optimizers and learning-rate schedulers to be used for training.
         """
-        
+
         optimizer = self.optimizer(params=self.trainer.model.parameters())
         if self.lr_scheduler is not None:
             lr_scheduler = self.lr_scheduler(optimizer=optimizer)
@@ -188,28 +178,37 @@ class DiffusionModelTrainer(BaseLightningTrainer):
                 },
             }
         return {"optimizer": optimizer}
-    
+
     def setup(self, stage: str) -> None:
+        self.diffusion_model = self.diffusion_model(
+            x_shape=self.hparams.x_shape,
+            max_tokens=self.max_tokens,
+            external_cond_dim=self.hparams.external_cond_dim,
+        )
+
         if self.hparams.ckpt_path:
-            self.load_state_dict(torch.load(self.hparams.ckpt_path, weights_only=False)["state_dict"])
+            self.load_state_dict(
+                torch.load(self.hparams.ckpt_path, weights_only=False)["state_dict"]
+            )
 
         if self.hparams.lora_finetune:
             for module in self.model.modules():
                 for param in module.parameters():
                     param.requires_grad = False
 
-            #for module in self.model.memory_layers.modules():
+            # for module in self.model.memory_layers.modules():
             #    for param in module.parameters():
             #        param.requires_grad = True
 
             from peft import LoraConfig, TaskType, get_peft_model
+
             # Create a LoRA configuration
             lora_config = LoraConfig(
-                r=8,                  # rank
-                lora_alpha=32,        # alpha scaling
-                lora_dropout=0.00,    # dropout, can be 0.0 as well
+                r=8,  # rank
+                lora_alpha=32,  # alpha scaling
+                lora_dropout=0.00,  # dropout, can be 0.0 as well
                 bias="none",
-                target_modules=["qkv", "proj"], 
+                target_modules=["qkv", "proj"],
             )
 
             ## Wrap your DiT model with LoRA
@@ -220,7 +219,6 @@ class DiffusionModelTrainer(BaseLightningTrainer):
                 for param in module.parameters():
                     param.requires_grad = True
 
-
         if self.compile_model and stage == "fit":
             if self.compile_model == "true_without_ddp_optimizer":
                 # NOTE: `cfg.compile` should be set to this value when using `torch.compile` with DDP & Gradient Checkpointing
@@ -229,10 +227,10 @@ class DiffusionModelTrainer(BaseLightningTrainer):
                 # pylint: disable=protected-access
                 torch._dynamo.config.optimize_ddp = False
 
-        self.model = torch.compile(
-            self.model,
-            disable=not self.compile_model,
-        )
+        #self.diffusion_model = torch.compile(
+        #    self.diffusion_model ,
+        #    disable=not self.compile_model,
+        #)
         self.register_data_mean_std(self.hparams.data_mean, self.hparams.data_std)
 
         # 2. VAE model
@@ -255,7 +253,7 @@ class DiffusionModelTrainer(BaseLightningTrainer):
                 case "interpolation":
                     assert (
                         not self.hparams.use_causal_mask
-                        #and not self.hparams.is_full_sequence
+                        # and not self.hparams.is_full_sequence
                         and self.max_tokens > 2
                     ), "To execute interpolation, the model must be non-causal, not full sequence, and be able to process more than 2 tokens."
                     self.metrics_interpolation = VideoMetric(
@@ -263,7 +261,8 @@ class DiffusionModelTrainer(BaseLightningTrainer):
                         metric_types,
                         split_batch_size=self.hparams.metrics_batch_size,
                     )
-   # ---------------------------------------------------------------------
+
+    # ---------------------------------------------------------------------
     # Length-related Properties and Utils
     # NOTE: "Frame" and "Token" should be distinguished carefully.
     # "Frame" refers to original unit of data loaded from dataset.
@@ -342,11 +341,7 @@ class DiffusionModelTrainer(BaseLightningTrainer):
         # 1. Tokenize the videos and optionally prepare the ground truth videos
         gt_videos = None
         if self.hparams.is_latent_diffusion:
-            xs = (
-                self._encode(batch["videos"])
-                if self.is_latent_online
-                else batch["latents"]
-            )
+            xs = self._encode(batch["videos"]) if self.is_latent_online else batch["latents"]
             if "videos" in batch:
                 gt_videos = batch["videos"]
         else:
@@ -373,11 +368,9 @@ class DiffusionModelTrainer(BaseLightningTrainer):
     def _update_metrics(self, all_videos: Dict[str, Tensor]) -> None:
         """Update all metrics during validation/test step."""
         if (
-            self.logging.n_metrics_frames is not None
+            self.hparams.n_metrics_frames is not None
         ):  # only consider the first n_metrics_frames for evaluation
-            all_videos = {
-                k: v[:, : self.logging.n_metrics_frames] for k, v in all_videos.items()
-            }
+            all_videos = {k: v[:, : self.hparams.n_metrics_frames] for k, v in all_videos.items()}
 
         gt_videos = all_videos["gt"]
         for task in self.tasks:
@@ -389,8 +382,8 @@ class DiffusionModelTrainer(BaseLightningTrainer):
                     context_mask[: self.n_context_frames] = True
                 case "interpolation":
                     context_mask[[0, -1]] = True
-            if self.logging.n_metrics_frames is not None:
-                context_mask = context_mask[: self.logging.n_metrics_frames]
+            if self.hparams.n_metrics_frames is not None:
+                context_mask = context_mask[: self.hparams.n_metrics_frames]
             metric(videos, gt_videos, context_mask=context_mask)
 
     def _log_videos(self, all_videos: Dict[str, Tensor], namespace: str) -> None:
@@ -423,15 +416,12 @@ class DiffusionModelTrainer(BaseLightningTrainer):
                 context_frames=(
                     self.n_context_frames
                     if task == "prediction"
-                    else torch.tensor(
-                        [0, n_frames - 1], device=self.device, dtype=torch.long
-                    )
+                    else torch.tensor([0, n_frames - 1], device=self.device, dtype=torch.long)
                 ),
                 captions=f"{task} | gt",
             )
 
         self.num_logged_videos += batch_size
-
 
     # ---------------------------------------------------------------------
     # Data Preprocessing Utils
@@ -465,7 +455,6 @@ class DiffusionModelTrainer(BaseLightningTrainer):
                     f"External condition processing {self.cfg.external_cond_processing} is not implemented."
                 )
 
-
     # ---------------------------------------------------------------------
     # Training
     # ---------------------------------------------------------------------
@@ -484,6 +473,8 @@ class DiffusionModelTrainer(BaseLightningTrainer):
 
         video = []
         memory_states = None
+
+        timesteps = timesteps.unsqueeze(1)  # .repeat(1, t)
         for i in range(t):
             x_noisy_i = x_noisy[:, :, i].unsqueeze(2)
             padding = torch.zeros_like(x_noisy_i)
@@ -497,57 +488,61 @@ class DiffusionModelTrainer(BaseLightningTrainer):
                 x_noisy_i = torch.cat([x_noisy_i, padding], dim=1)
             x_noisy_i = x_noisy_i.permute(0, 2, 1, 3, 4)
 
-
             if False:
-                noise_pred, memory_states, suprises = self.model.forward(x_noisy_i, timesteps, cond=y, memory_states=memory_states, return_memory=True)
+                noise_pred, memory_states, suprises = self.model.forward(
+                    x_noisy_i, timesteps, cond=y, memory_states=memory_states, return_memory=True
+                )
             else:
-                #noise_pred = self.model.forward(x_noisy_i, timesteps, cond=y, cache_params=memory_states, use_cache=False)
-                noise_pred, memory_states = self.model.forward(x_noisy_i, timesteps, cond=y, cache_params=memory_states, use_cache=True, run=i)
+                # noise_pred = self.model.forward(x_noisy_i, timesteps, cond=y, cache_params=memory_states, use_cache=False)
+                y = None
+
+                noise_pred, memory_states, aux_output = self.model.forward(
+                    x_noisy_i, timesteps, external_cond=y, neural_memory_cache=memory_states
+                )
+                noise_pred = noise_pred[:, :, :3]
+                # noise_pred, memory_states = self.model.forward(x_noisy_i, timesteps, cond=y, cache_params=memory_states, use_cache=True, run=i)
                 suprises = torch.zeros_like(noise_pred)
             # b, t, c, h, w
-            x_pred = self.scheduler.get_velocity(sample=noise_pred, noise=x_noisy_i[:, : ,:3], timesteps=timesteps)
+            x_pred = self.scheduler.get_velocity(
+                sample=noise_pred, noise=x_noisy_i[:, :, :3], timesteps=timesteps.squeeze(-1)
+            )
             video.append(x_pred)
-        
+
         x_pred = torch.cat(video, dim=1)
-        #x_pred = x_pred.permute(0, 2, 1, 3, 4)
+        # x_pred = x_pred.permute(0, 2, 1, 3, 4)
         if not loss:
             return x_pred, timesteps
 
         alphas_cumprod = self.scheduler.alphas_cumprod[timesteps]
         weights = 1 / (1 - alphas_cumprod)
-        
+
         while len(weights.shape) < len(x_pred.shape):
             weights = weights.unsqueeze(-1)
         diffusion_loss = self.loss(x_pred.permute(0, 2, 1, 3, 4), x, weights)  # adjust as needed
-        return  x_pred, diffusion_loss, None #, #suprises
+        return x_pred, diffusion_loss, None  # , #suprises
 
-
-
-    def training_step(self, batch: Tuple[Tensor, Tensor, Tensor], batch_idx: int, namespace: str ="training") -> STEP_OUTPUT:
+    def training_step(
+        self, batch: Tuple[Tensor, Tensor, Tensor], batch_idx: int, namespace: str = "training"
+    ) -> STEP_OUTPUT:
+        """Training step"""
         xs, conditions, masks, *_ = batch
-        
-        # ----- Diffusion branch: Compute diffusion loss -----
-        timesteps = None
-        xs_pred, diffusion_loss, aux_loss = self.forward(xs, conditions=self._process_conditions(conditions), loss=True, timesteps=timesteps)
-        #surprises = surprises[-1].mean()
-        
-        # ----- Combine losses -----
-        # You might want to weight the autoencoder loss differently (using lambda_ae)
-        ## Update metrics and log losses
-        #self.train_loss.update(total_loss)
-        #self.recon_loss.update(recon_loss)
-        #self.diffusion_loss.update(diffusion_loss)
-        #self.log("train/loss", total_loss, on_step=True, on_epoch=False, prog_bar=True)
-        #self.log("train/surprises", surprises, on_step=True, on_epoch=False, prog_bar=True)
-        #self.log("train/diffusion_loss", diffusion_loss, on_step=True, on_epoch=False, prog_bar=True)
 
-        if batch_idx % self.trainer.log_every_n_steps == 0: # cfg.logging.loss_freq == 0:
+        noise_levels, masks = self._get_training_noise_levels(xs, masks)
+        xs_pred, loss, aux_loss = self.diffusion_model(
+            xs,
+            self._process_conditions(conditions),
+            k=noise_levels,
+            context_frame_mask=masks,
+        )
+        loss = self._reweight_loss(loss, masks)
+        if batch_idx % self.trainer.log_every_n_steps == 0:  # cfg.logging.loss_freq == 0:
             self.log(
                 f"{namespace}/loss",
-                diffusion_loss,
+                loss,
                 on_step=namespace == "training",
                 on_epoch=namespace != "training",
                 sync_dist=True,
+                prog_bar=True,
             )
             if aux_loss is not None:
                 for key, value in aux_loss.items():
@@ -557,21 +552,70 @@ class DiffusionModelTrainer(BaseLightningTrainer):
                         on_step=namespace == "training",
                         on_epoch=namespace != "training",
                         sync_dist=True,
+                        prog_bar=True,
                     )
 
         xs, xs_pred = map(self._unnormalize_x, (xs, xs_pred))
+
         output_dict = {
-            "loss": diffusion_loss,
+            "loss": loss,
             "xs_pred": xs_pred,
             "xs": xs,
         }
-        return output_dict 
+
+        return output_dict
+
+        #xs, conditions, masks, *_ = batch
+
+        ## ----- Diffusion branch: Compute diffusion loss -----
+        #timesteps = None
+        #xs_pred, diffusion_loss, aux_loss = self.forward(
+        #    xs, conditions=self._process_conditions(conditions), loss=True, timesteps=timesteps
+        #)
+        ## surprises = surprises[-1].mean()
+
+        ## ----- Combine losses -----
+        ## You might want to weight the autoencoder loss differently (using lambda_ae)
+        ### Update metrics and log losses
+        ## self.train_loss.update(total_loss)
+        ## self.recon_loss.update(recon_loss)
+        ## self.diffusion_loss.update(diffusion_loss)
+        ## self.log("train/loss", total_loss, on_step=True, on_epoch=False, prog_bar=True)
+        ## self.log("train/surprises", surprises, on_step=True, on_epoch=False, prog_bar=True)
+        ## self.log("train/diffusion_loss", diffusion_loss, on_step=True, on_epoch=False, prog_bar=True)
+
+        #if batch_idx % self.trainer.log_every_n_steps == 0:  # cfg.logging.loss_freq == 0:
+        #    self.log(
+        #        f"{namespace}/loss",
+        #        diffusion_loss,
+        #        on_step=namespace == "training",
+        #        on_epoch=namespace != "training",
+        #        sync_dist=True,
+        #        prog_bar=True,
+        #    )
+        #    if aux_loss is not None:
+        #        for key, value in aux_loss.items():
+        #            self.log(
+        #                f"{namespace}/{key}",
+        #                value,
+        #                on_step=namespace == "training",
+        #                on_epoch=namespace != "training",
+        #                sync_dist=True,
+        #                prog_bar=True,
+        #            )
+
+        #xs, xs_pred = map(self._unnormalize_x, (xs, xs_pred))
+        #output_dict = {
+        #    "loss": diffusion_loss,
+        #    "xs_pred": xs_pred,
+        #    "xs": xs,
+        #}
+        #return output_dict
 
     def loss(self, pred, target, weight=None):
         if weight is None:
             weight = torch.ones_like(pred)
         return torch.mean((weight * (pred - target) ** 2).reshape(pred.shape[0], -1))
-    
 
     def on_before_optimizer_step(self, optimizer: Optimizer) -> None:
         if (
@@ -582,7 +626,10 @@ class DiffusionModelTrainer(BaseLightningTrainer):
             # NOTE: `norms` need not be gathered, as they are already uniform across all devices
             self.log_dict(norms)
 
-     # ---------------------------------------------------------------------
+    
+
+
+    # ---------------------------------------------------------------------
     # Validation & Test
     # ---------------------------------------------------------------------
 
@@ -597,19 +644,15 @@ class DiffusionModelTrainer(BaseLightningTrainer):
 
         # 2. Sample all videos (based on the specified tasks)
         # and log the generated videos and metrics.
-        if not (
-            self.trainer.sanity_checking and not self.hparams.log_sanity_generation
-        ):
+        if not (self.trainer.sanity_checking and not self.hparams.log_sanity_generation):
             all_videos = self._sample_all_videos(batch, batch_idx, namespace)
             self._update_metrics(all_videos)
             self._log_videos(all_videos, namespace)
 
-
     def on_validation_epoch_start(self) -> None:
         if self.hparams.log_deterministic is not None:
             self.generator = torch.Generator(device=self.device).manual_seed(
-                self.global_rank
-                + self.trainer.world_size * self.hparams.log_deterministic
+                self.global_rank + self.trainer.world_size * self.hparams.log_deterministic
             )
         if self.hparams.is_latent_diffusion and not self.hparams.is_latent_online:
             self._load_vae()
@@ -641,7 +684,6 @@ class DiffusionModelTrainer(BaseLightningTrainer):
     def on_test_epoch_end(self) -> None:
         self.on_validation_epoch_end(namespace="test")
 
-
     # ---------------------------------------------------------------------
     # Denoising Evaluation
     # ---------------------------------------------------------------------
@@ -650,13 +692,13 @@ class DiffusionModelTrainer(BaseLightningTrainer):
         """Evaluate the denoising performance during training."""
         xs, conditions, masks, gt_videos = batch
 
-        #xs = xs[:, : self.max_tokens]
-        #if conditions is not None:
-            #conditions = conditions[:, : self.max_tokens]
-        #masks = masks[:, : self.max_tokens]
-        #if gt_videos is not None:
-        #    gt_videos = gt_videos[:, : self.max_frames]
-#
+        xs = xs[:, : self.max_tokens]
+        if conditions is not None:
+            conditions = conditions[:, : self.max_tokens]
+        masks = masks[:, : self.max_tokens]
+        if gt_videos is not None:
+            gt_videos = gt_videos[:, : self.max_frames]
+
         batch = (xs, conditions, masks, gt_videos)
         output = self.training_step(batch, batch_idx, namespace=namespace)
 
@@ -695,9 +737,8 @@ class DiffusionModelTrainer(BaseLightningTrainer):
         )
 
         ## log validation loss
-        #loss = output["loss"]
-        #self.log(f"{namespace}/loss", loss, on_step=True, on_epoch=False, prog_bar=True)
-
+        # loss = output["loss"]
+        # self.log(f"{namespace}/loss", loss, on_step=True, on_epoch=False, prog_bar=True)
 
     # ---------------------------------------------------------------------
     # Sampling
@@ -710,11 +751,7 @@ class DiffusionModelTrainer(BaseLightningTrainer):
         all_videos: Dict[str, torch.Tensor] = {"gt": xs}
 
         for task in self.tasks:
-            sample_fn = (
-                self._predict_videos
-                if task == "prediction"
-                else self._interpolate_videos
-            )
+            sample_fn = self._predict_videos if task == "prediction" else self._interpolate_videos
             all_videos[task] = sample_fn(xs, conditions=conditions)
 
         # remove None values
@@ -724,8 +761,7 @@ class DiffusionModelTrainer(BaseLightningTrainer):
         # decode latents if using latents
         if self.hparams.is_latent_diffusion:
             all_videos = {
-                k: self._decode(v) if k != "gt" else gt_videos
-                for k, v in all_videos.items()
+                k: self._decode(v) if k != "gt" else gt_videos for k, v in all_videos.items()
             }
 
         # replace the context frames of video predictions with the ground truth
@@ -739,62 +775,133 @@ class DiffusionModelTrainer(BaseLightningTrainer):
         self, xs: torch.Tensor, conditions: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         """
-        Predict the videos with the given context, using sliding window rollouts if necessary.
-        Optionally, if cfg.tasks.prediction.keyframe_density < 1, predict the keyframes first,
-        then interpolate the missing frames.
+        Predict the videos with the given context.
+        Optionally do rolling/sliding windows if the sequence is large.
         """
-        xs_pred = xs.clone()  # b, t, c, h, w
+        xs_pred = xs.clone()  # [b, t, c, h, w]
 
-        # -- Example keyframe logic (if needed)
-        # density = self.cfg.tasks.prediction.keyframe_density or 1
-        # if density > 1:
-        #     raise ValueError("tasks.prediction.keyframe_density must be <= 1")
-        # keyframe_indices = (
-        #     torch.linspace(0, xs_pred.shape[1] - 1, round(density * xs_pred.shape[1]))
-        #     .round()
-        #     .long()
-        # )
-        # # force context frames to be keyframes
-        # keyframe_indices = torch.cat(
-        #     [torch.arange(self.n_context_tokens), keyframe_indices]
-        # ).unique()
-        # key_conditions = conditions[:, keyframe_indices] if conditions is not None else None
-        # # 1. Predict keyframes
-        # xs_pred_key, *_ = self._predict_sequence(
-        #     xs_pred[:, : self.n_context_tokens],
-        #     length=len(keyframe_indices),
-        #     conditions=key_conditions,
-        #     reconstruction_guidance=self.cfg.diffusion.reconstruction_guidance,
-        #     sliding_context_len=self.cfg.tasks.prediction.sliding_context_len
-        #         or self.max_tokens // 2,
-        # )
-        # xs_pred[:, keyframe_indices] = xs_pred_key
-
-        # -- If you skip the keyframe logic entirely, just do one pass:
-        xs_pred, *_ = self._predict_sequence(
+        # Basic single-pass call to _predict_sequence
+        xs_pred, _ = self._predict_sequence(
             context=xs_pred[:, : self.n_context_tokens],
             length=xs_pred.shape[1],
             conditions=conditions,
             reconstruction_guidance=self.hparams.reconstruction_guidance,
-            sliding_context_len=self.hparams.sliding_context_len
-                or self.max_tokens // 2,
+            sliding_context_len=self.hparams.sliding_context_len # or (self.max_tokens // 2),
         )
-
-        # 2. (Optional) Interpolate the intermediate frames if you used keyframes
-        # (If not using keyframes, you can remove this chunk.)
-        # if len(keyframe_indices) < xs_pred.shape[1]:
-        #     context_mask = torch.zeros(xs_pred.shape[:2], device=self.device).bool()
-        #     context_mask[:, keyframe_indices] = True
-        #     xs_pred = self._interpolate_videos(
-        #         context=xs_pred,
-        #         context_mask=context_mask,
-        #         conditions=conditions,
-        #     )
-
         return xs_pred
 
+    
     # ---------------------------------------------------------------------
-    # Sampling Utils
+    # Training Utils
+    # ---------------------------------------------------------------------
+
+    def _get_training_noise_levels(
+        self, xs: Tensor, masks: Tensor = None
+    ) -> Tuple[Tensor, Tensor]:
+        """Generate random noise levels for training."""
+        batch_size, n_tokens, *_ = xs.shape
+
+        # random function different for continuous and discrete diffusion
+        rand_fn = partial(
+            *(
+                (torch.rand,)
+                if not self.diffusion_model.is_discrete # self.cfg.diffusion.is_continuous
+                else (torch.randint, 0, self.diffusion_model.timesteps)
+            ),
+            device=xs.device,
+            generator=self.generator,
+        )
+
+        # baseline training (SD: fixed_context, BD: variable_context)
+        context_mask = None
+
+        #if self.cfg.variable_context.enabled:
+        #    assert (
+        #        not self.cfg.fixed_context.enabled
+        #    ), "Cannot use both fixed and variable context"
+        #    context_mask = bernoulli_tensor(
+        #        (batch_size, n_tokens),
+        #        self.cfg.variable_context.prob,
+        #        device=self.device,
+        #        generator=self.generator,
+        #    ).bool()
+        #elif self.cfg.fixed_context.enabled:
+        context_indices = list(range(self.n_context_tokens))
+        context_mask = torch.zeros(
+            (batch_size, n_tokens), dtype=torch.bool, device=xs.device
+        )
+        context_mask[:, context_indices] = True
+
+        match self.hparams.noise_level:
+            case "random_independent":  # independent noise levels (Diffusion Forcing)
+                noise_levels = rand_fn((batch_size, n_tokens))
+            case "random_uniform":  # uniform noise levels (Typical Video Diffusion)
+                noise_levels = rand_fn((batch_size, 1)).repeat(1, n_tokens)
+
+        #if self.cfg.uniform_future.enabled:  # simplified training (Appendix A.5)
+        #    noise_levels[:, self.n_context_tokens :] = rand_fn((batch_size, 1)).repeat(
+        #        1, n_tokens - self.n_context_tokens
+        #    )
+
+        ## treat frames that are not available as "full noise"
+        #noise_levels = torch.where(
+        #    reduce(masks.bool(), "b t ... -> b t", torch.any),
+        #    noise_levels,
+        #    torch.full_like(
+        #        noise_levels,
+        #        1 if not self.diffusion_model.is_discrete else self.timesteps - 1,
+        #    ),
+        #)
+
+        if context_mask is not None:
+            # binary dropout training to enable guidance
+            dropout = (
+                #(
+                #    self.cfg.variable_context
+                #    if self.cfg.variable_context.enabled
+                #    else self.cfg.fixed_context
+                #).dropout
+                self.hparams.context_dropout
+                if self.trainer.training
+                else 0.0
+            )
+            context_noise_levels = bernoulli_tensor(
+                (batch_size, 1),
+                dropout,
+                device=xs.device,
+                generator=self.generator,
+            )
+            if  self.diffusion_model.is_discrete:
+                context_noise_levels = context_noise_levels.long() * (
+                    self.diffusion_model.timesteps - 1
+                )
+
+            if not self.hparams.cat_context_in_c_dim:
+                noise_levels = torch.where(context_mask, context_noise_levels, noise_levels)
+
+            # modify masks to exclude context frames from loss computation
+            context_mask = rearrange(
+                context_mask, "b t -> b t" + " 1" * len(masks.shape[2:])
+            )
+            masks = torch.where(context_mask, False, masks)
+
+        return noise_levels, masks
+
+    def _reweight_loss(self, loss, weight=None):
+        if weight is not None:
+            expand_dim = len(loss.shape) - len(weight.shape)
+            weight = rearrange(
+                weight,
+                "... -> ..." + " 1" * expand_dim,
+            )
+            loss = loss * weight
+
+        return loss.mean()
+
+
+
+    # ---------------------------------------------------------------------
+    # Sampling Utilities
     # ---------------------------------------------------------------------
 
     def _generate_scheduling_matrix(
@@ -802,131 +909,150 @@ class DiffusionModelTrainer(BaseLightningTrainer):
         horizon: int,
         padding: int = 0,
     ):
+        """
+        Generates a scheduling matrix based on the self.hparams.scheduling_matrix parameter.
+        Each row represents a noise-level index (or “timestep”).
+        """
+
         match self.hparams.scheduling_matrix:
             case "full_sequence":
-                scheduling_matrix = np.arange(self.hparams.sampling_timesteps, -1, -1)[
-                    :, None
-                ].repeat(horizon, axis=1)
+                # Each column has the same countdown from sampling_timesteps -> 0
+                scheduling_matrix = np.arange(self.hparams.sampling_timesteps, -1, -1)[:, None]
+                scheduling_matrix = np.repeat(scheduling_matrix, horizon, axis=1)
+
             case "autoregressive":
+                # Example pyramid / autoregressive schedule
                 scheduling_matrix = self._generate_pyramid_scheduling_matrix(
-                    horizon, self.hparams.sampling_timesteps
+                    horizon=horizon,
+                    timesteps=self.hparams.sampling_timesteps,
                 )
+
+            case other:
+                raise ValueError(f"Unknown scheduling_matrix type: {other}")
 
         scheduling_matrix = torch.from_numpy(scheduling_matrix).long()
 
-        #scheduling_matrix = self.diffusion_model.ddim_idx_to_noise_level(
-        #    scheduling_matrix
-        #)
+        # Optionally convert from “timestep index” to actual noise levels:
+        scheduling_matrix = self.diffusion_model.ddim_idx_to_noise_level(scheduling_matrix)
 
-        # paded entries are labeled as pure noise
+        # If we want to pad the extra tokens as pure noise, do so here:
         scheduling_matrix = F.pad(
-            scheduling_matrix, (0, padding, 0, 0), value=self.timesteps - 1
+            scheduling_matrix,
+            (0, padding, 0, 0),
+            value=self.diffusion_model.timesteps - 1,  # or your “max noise index”
         )
 
         return scheduling_matrix
 
-
-
     def _predict_sequence(
         self,
-        context: torch.Tensor,
-        length: Optional[int] = None,
+        context: torch.Tensor,   # (batch_size, self.n_context_tokens, *x_shape) just gt frames
+        length: Optional[int] = None, # self.n_tokens frames  (determined over xs_pred)
         conditions: Optional[torch.Tensor] = None,
         guidance_fn: Optional[Callable] = None,
         reconstruction_guidance: float = 0.0,
-        sliding_context_len: Optional[int] = None,
+        sliding_context_len: Optional[int] = None, # self.hparams.sliding_context_len 
         return_all: bool = False,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         """
-        Predict a sequence given context tokens at the beginning, possibly using sliding-window
-        if length > self.max_tokens. This version removes any HistoryGuidance usage.
+        Predict a sequence given initial context frames, possibly in a
+        rolling/sliding window approach if length > self.max_tokens.
         """
-        if length is None:
-            length = self.max_tokens
-        if sliding_context_len is None:
-            if self.max_tokens < length:
-                raise ValueError(
-                    "when length > max_tokens, sliding_context_len must be specified."
-                )
-            else:
-                sliding_context_len = self.max_tokens - 1
         if sliding_context_len == -1:
             sliding_context_len = self.max_tokens - 1
 
         batch_size, gt_len, *_ = context.shape
-
-        if sliding_context_len < gt_len:
-            raise ValueError(
-                "sliding_context_len is expected to be >= length of initial context."
-            )
-
-        chunk_size = self.hparams.chunk_size if self.hparams.use_causal_mask else self.max_tokens
-
+        
         curr_token = gt_len
         xs_pred = context
         record = None
+
+        # How many total diffusion steps for the entire rolling process?
+        # The factor accounts for how many “chunks” we will sample
+
+        #if sliding_context_len == 0:
+        #    # we have in the first iteration   
+        #else:
+        #number_of_chunks = 1 + max(0, (length - self.max_tokens)) // (self.max_tokens - sliding_context_len)
+        number_of_chunks = math.ceil((length - self.max_tokens) / (self.max_tokens - sliding_context_len)) + 1 
+
+            #number_of_chunks = 1 + max(0, (length - sliding_context_len - 1)) // max(1, (self.max_tokens - sliding_context_len))
+        total_passes = self.hparams.sampling_timesteps * number_of_chunks
+
         pbar = tqdm(
-            total=self.hparams.sampling_timesteps
-            * (
-                1
-                + (length - sliding_context_len - 1)
-                // (self.max_tokens - sliding_context_len)
-            ),
+            total=total_passes,
             initial=0,
             desc="Predicting (vanilla diffusion)",
             leave=False,
         )
 
-        
-        # put everything here
-
-
+        # Rolling from left to right until we generate 'length' frames:
+        iteration = 0
         while curr_token < length:
             # If storing all steps, forbid sliding windows for simplicity
             if return_all:
                 raise ValueError("return_all is not supported with sliding window.")
-            # actual context depends on whether it's during sliding window or not
-            c = min(sliding_context_len, curr_token)
-            h = min(length - curr_token, self.max_tokens - c)
-            if chunk_size > 0:
-                h = min(h, chunk_size)
-            l = c + h
 
-            # Prepare the next chunk’s context
+            # Decide how many frames of context vs. how many frames to generate:
+            if sliding_context_len == 0 and iteration == 0:
+                c = self.n_context_tokens    
+            else: 
+                c = min(sliding_context_len, curr_token)
+
+
+            h =  self.max_tokens - c
+            l = c + h # total length fed to the model
+
+            if not self.hparams.generate_in_noise_dim:
+                l = (self.n_tokens // self.max_tokens) * self.max_tokens  # total frames to be generated
+                h = l - c
+                if h < 0:
+                    raise ValueError("Context length is larger than the total number of tokens.")
+                
+
+            # Prepare next chunk (context chunk + blank frames)
             pad = torch.zeros((batch_size, h, *self.hparams.x_shape), device=self.device)
-            context_mask = torch.cat([
-                # Mark the existing c tokens (some might be GT, some generated)
-                torch.ones((batch_size, c), dtype=torch.long, device=self.device),
-                # Mark the h new tokens as to-be-generated (0)
-                torch.zeros((batch_size, h), dtype=torch.long, device=self.device),
-            ], dim=1)
 
-            # If you want to distinguish GT vs generated context, do so here
-            # but for “vanilla” sampling, we’ll just treat them as context=1
+            context_mask = torch.cat(
+                [
+                    # Mark c tokens as “context” (1)
+                    torch.ones((batch_size, c), dtype=torch.long, device=self.device),
+                    # Mark h tokens as “to be generated” (0)
+                    torch.zeros((batch_size, h), dtype=torch.long, device=self.device),
+                ],
+                dim=1,
+            )
 
-            context_chunk = torch.cat([
-                xs_pred[:, -c:] if c > 0 else torch.empty(0),
-                pad
-            ], dim=1)
-            # Run a standard diffusion sampling on this chunk
-            new_pred, _ = self._sample_sequence(
-                batch_size=batch_size,
+            context_chunk = torch.cat(
+                [xs_pred[:, -c:] if c > 0 else torch.empty_like(pad[:, :0]), pad], dim=1
+            )
+
+            if conditions is not None and self.n_tokens > self.max_tokens:  #self.hparams.use_causal_mask:
+                cond_slice = conditions[:, curr_token - c : curr_token - c + l]
+            else:
+                cond_slice= conditions
+
+            # -----------------------------------
+            new_pred, record = self._sample_sequence(
+                batch_size,
                 length=l,
                 context=context_chunk,
                 context_mask=context_mask,
-                conditions=conditions[:, curr_token - c : curr_token - c + l]
-                    if (conditions is not None and self.hparams.use_causal_mask)
-                    else conditions,
+                conditions=cond_slice,
                 guidance_fn=guidance_fn,
-                reconstruction_guidance=reconstruction_guidance,
-                return_all=False,
+                #reconstruction_guidance=reconstruction_guidance,
+                #history_guidance=None,
+                return_all=return_all,
+                number_of_chunks=number_of_chunks,
                 pbar=pbar,
             )
-            # Take only the newly generated portion
-            xs_pred = torch.cat([xs_pred, new_pred[:, -h:]], dim=1)
+            xs_pred = torch.cat([xs_pred, new_pred[:, -h:]], 1)
             curr_token = xs_pred.shape[1]
-
+            iteration += 1
         pbar.close()
+        if xs_pred.shape[1] > length:
+            xs_pred = xs_pred[:, :length]
+
         return xs_pred, record
 
     def _sample_sequence(
@@ -936,841 +1062,321 @@ class DiffusionModelTrainer(BaseLightningTrainer):
         context: Optional[torch.Tensor] = None,
         context_mask: Optional[torch.Tensor] = None,
         conditions: Optional[torch.Tensor] = None,
-        guidance_fn: Optional[Callable] = None,
-        reconstruction_guidance: float = 0.0,
         return_all: bool = False,
+        number_of_chunks: int = 1,
         pbar: Optional[tqdm] = None,
+        guidance_fn: Optional[Callable] = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
-        """
-        A simpler (vanilla) sampling method for up to self.max_tokens in length. 
-        We remove any references to HistoryGuidance or fancy scheduling. 
-        We just do a standard diffusion reverse pass from self.sampling_timesteps down to 1.
-        """
+
         x_shape = self.hparams.x_shape
+        padding = self.max_tokens - length
 
-        if length is None:
-            length = self.max_tokens if context is None else context.shape[1]
-        if length > self.max_tokens:
-            raise ValueError(
-                f"length is expected to <= self.max_tokens, but got {length}."
-            )
-
-        if context is not None:
-            if context_mask is None:
-                raise ValueError("context_mask must be provided if context is given.")
-            if context.shape[:2] != context_mask.shape:
-                raise ValueError("context and context_mask must have the same shape.")
-        else:
-            # If no context is given, create dummy zero context
-            context = torch.zeros(
-                (batch_size, length, *x_shape), device=self.device
-            )
-            context_mask = torch.zeros(
-                (batch_size, length), dtype=torch.long, device=self.device
-            )
-
-        # For non-causal, conditions should always have shape [b, self.max_tokens, ...]
-        # For causal, conditions must match the length dimension
-        if conditions is not None:
-            if self.hparams.use_causal_mask and conditions.shape[1] != length:
-                raise ValueError(
-                    f"For causal models, conditions length must be {length}, "
-                    f"but got {conditions.shape[1]}."
-                )
-            elif not self.hparams.use_causal_mask and conditions.shape[1] != self.max_tokens:
-                raise ValueError(
-                    f"For noncausal models, conditions length must be {self.max_tokens}, "
-                    f"but got {conditions.shape[1]}."
-                )
-
-        horizon = length if self.hparams.use_causal_mask else self.max_tokens
-        padding = horizon - length
-
-        # create initial xs_pred with noise
-        xs_pred = torch.randn(
-            (batch_size, horizon, *x_shape),
-            device=self.device,
-            generator=self.generator,
-        )
-        xs_pred = torch.clamp(xs_pred, -self.hparams.clip_noise, self.hparams.clip_noise)
-
-        # generate scheduling matrix
         scheduling_matrix = self._generate_scheduling_matrix(
-            horizon - padding,
-            padding,
+            length,
+            0,
         )
         scheduling_matrix = scheduling_matrix.to(self.device)
         scheduling_matrix = repeat(scheduling_matrix, "m t -> m b t", b=batch_size)
-        # fill context tokens' noise levels as -1 in scheduling matrix
-        #if not self.is_full_sequence:
-        if False:
-            scheduling_matrix = torch.where(
-                context_mask[None] >= 1, -1, scheduling_matrix
-            )
 
         # prune scheduling matrix to remove identical adjacent rows
         diff = scheduling_matrix[1:] - scheduling_matrix[:-1]
         skip = torch.argmax((~reduce(diff == 0, "m b t -> m", torch.all)).float())
         scheduling_matrix = scheduling_matrix[skip:]
 
+        # Prepare the record list if we want all intermediate steps
         record = [] if return_all else None
 
-        if pbar is None:
-            pbar = tqdm(
-                total=scheduling_matrix.shape[0] - 1,
-                initial=0,
-                desc="Sampling: ",
-                leave=False,
-            )
-
-        for m in range(scheduling_matrix.shape[0] - 1):
-            from_noise_levels = scheduling_matrix[m]
-            to_noise_levels = scheduling_matrix[m + 1]
-
-            # update context mask by changing 0 -> 2 for fully generated tokens
-            context_mask = torch.where(
-                torch.logical_and(context_mask == 0, from_noise_levels == -1),
-                2,
-                context_mask,
-            )
-
-            # create a backup with all context tokens unmodified
-            xs_pred_prev = xs_pred.clone()
-            if return_all:
-                record.append(xs_pred.clone())
-
-            conditions_mask = None
-            #with history_guidance(context_mask) as history_guidance_manager:
-            if True:
-                xs_pred_in = torch.cat([context, xs_pred], dim=2) # b, t, c, h, w
-                model_output, _ = self.model(xs_pred_in, from_noise_levels,  cond=conditions, use_cache=True)
-                
-
-
-                nfe = history_guidance_manager.nfe
-                pbar.set_postfix(NFE=nfe)
-
-                xs_pred, from_noise_levels, to_noise_levels, conditions_mask = (
-                    history_guidance_manager.prepare(
-                        xs_pred,
-                        from_noise_levels,
-                        to_noise_levels,
-                        replacement_fn=self.diffusion_model.q_sample,
-                        replacement_only=self.is_full_sequence,
-                    )
-                )
-
-                # update xs_pred by DDIM or DDPM sampling
-                xs_pred = self.diffusion_model.sample_step(
-                    xs_pred,
-                    from_noise_levels,
-                    to_noise_levels,
-                    self._process_conditions(
-                        (
-                            repeat(
-                                conditions,
-                                "b ... -> (b nfe) ...",
-                                nfe=nfe,
-                            ).clone()
-                            if conditions is not None
-                            else None
-                        ),
-                        from_noise_levels,
-                    ),
-                    conditions_mask,
-                    guidance_fn=composed_guidance_fn,
-                )
-
-                xs_pred = history_guidance_manager.compose(xs_pred)
-
-            # only replace the tokens being generated (revert context tokens)
-            xs_pred = torch.where(
-                self._extend_x_dim(context_mask) == 0, xs_pred, xs_pred_prev
-            )
-            pbar.update(1)
-
-        if return_all:
-            record.append(xs_pred.clone())
-            record = torch.stack(record)
-        if padding > 0:
-            xs_pred = xs_pred[:, :-padding]
-            record = record[:, :, :-padding] if return_all else None
-
-        return xs_pred, record
-
-
-
-
-
-
-
-
-
-
-        # Initialize from random noise (vanilla approach)
+        # Initial random noise
         xs_pred = torch.randn(
-            (batch_size, length, *x_shape),
+            (batch_size, self.max_tokens, *x_shape),
             device=self.device,
             generator=self.generator,
         )
         xs_pred = torch.clamp(xs_pred, -self.hparams.clip_noise, self.hparams.clip_noise)
 
-        # Where context_mask >= 1, we clamp to provided context
-        xs_pred = torch.where(self._extend_x_dim(context_mask) >= 1, context, xs_pred)
-
-        record = [] if return_all else None
-
-        # We do a typical reverse-diffusion loop: self.sampling_timesteps steps.
-        # For each step, we call self.diffusion_model.sample_step
-        # Possibly with an optional reconstruction guidance or other guidance function.
-        timesteps = list(range(self.hparams.sampling_timesteps))
-        for t in timesteps:
-            xs_pred_prev = xs_pred.clone()
-            # Single step of your diffusion model’s reverse pass
-            #xs_pred = 
-
-
-            xs_pred = self.diffusion_model.sample_step(
-                x=xs_pred,
-                # In a standard diffusion, you pass integer "t" or "t -> t_next" (DDIM, etc.).
-                from_noise_level=t,
-                to_noise_level=(t + 1),
-                conditions=self._process_conditions(conditions, t),
-                conditions_mask=None,
-                guidance_fn=curr_guidance_fn,
+        # Create a single progress bar if none is given
+        if pbar is None:
+            pbar = tqdm(
+                total=scheduling_matrix.shape[0] - 1,
+                initial=0,
+                desc="Sampling with DFoT",
+                leave=False,
             )
 
-            # Re-clamp the known context frames so we do not overwrite them
-            xs_pred = torch.where(self._extend_x_dim(context_mask) >= 1, context, xs_pred)
+        if not self.hparams.generate_in_noise_dim:
+            xs_pred, record = self._sample_sequence_in_time_dimension(
+                batch_size,
+                length,
+                context,
+                context_mask,
+                conditions,
+                return_all,
+                number_of_chunks,
+                pbar,
+                guidance_fn=guidance_fn,
+            )
+        else:
 
-            if return_all:
-                record.append(xs_pred.clone())
-            if pbar is not None:
+            for m in range(scheduling_matrix.shape[0] - 1):
+                from_noise_levels_full = scheduling_matrix[m]     # shape: [b, t]
+                to_noise_levels_full = scheduling_matrix[m + 1]   # shape: [b, t]
+
+                # Decide how many times we loop over chunks
+                if self.hparams.generate_in_noise_dim:
+                    number_of_generations = number_of_chunks
+                else:
+                    number_of_generations = 1
+
+                # Prepare final container if you want to piecewise-generate
+                final_xs_pred = torch.zeros(
+                    (batch_size, self.max_tokens * number_of_generations, *x_shape),
+                    device=self.device
+                )
+                from_noise_levels = from_noise_levels_full
+                to_noise_levels   = to_noise_levels_full
+
+                if context is None:
+                    context = torch.zeros_like(xs_pred)
+                    context_mask = torch.zeros(
+                        (batch_size, self.max_tokens),
+                        dtype=torch.long,
+                        device=self.device
+                    )
+
+                # If we do NOT concatenate context into the diffusion model's channels,
+                # we literally replace the context frames in xs_pred with the given context
+                if not self.hparams.cat_context_in_c_dim:
+                    xs_pred = torch.where(self._extend_x_dim(context_mask) >= 1, context, xs_pred)
+
+                # Make a backup for context tokens so we can revert them after diffusion
+                xs_pred_prev = xs_pred.clone()
+                if return_all:
+                    record.append(xs_pred.clone())
+
+                # If we DO concatenate context in c-dim, cat them here
+                if self.hparams.cat_context_in_c_dim:
+                    xs_pred = torch.cat([xs_pred, context], dim=2)  # depends on your exact shape
+
+                # Single diffusion step from one noise level to another
+                xs_pred, aux_output = self.diffusion_model.sample_step(
+                    xs_pred,
+                    from_noise_levels,
+                    to_noise_levels,
+                    self._process_conditions(conditions, from_noise_levels),
+                    #conditions_mask=None,
+                    guidance_fn=guidance_fn,
+                )
+
+                # If we concatenated context channels, revert the shape
+                if self.hparams.cat_context_in_c_dim:
+                    # removing last channels
+                    xs_pred = xs_pred[:, :, : x_shape[0]]
+
+                # Revert context tokens to their original values
+                xs_pred = torch.where(
+                    self._extend_x_dim(context_mask) == 0, xs_pred, xs_pred_prev
+                )
+                final_xs_pred = xs_pred
+
                 pbar.update(1)
+            # End of chunk loop
+            # Overwrite xs_pred with the final chunk results if desired
+            xs_pred = final_xs_pred
 
+            # Increment progress bar once per main iteration
+
+        # Finished the main loop
         if return_all:
-            record = torch.stack(record, dim=0)
+            # Append final state
+            record.append(xs_pred.clone())
+
+        # Stack record outside the loop
+        if return_all:
+            record = torch.stack(record, dim=0)  # shape: [steps, b, tokens, ...]
+
+        # Remove any padding from the final predictions / record
+        if padding > 0:
+            xs_pred = xs_pred[:, :-padding]
+            if return_all:
+                record = record[..., :-padding, :]
 
         return xs_pred, record
 
+# algorithm
+    def _sample_sequence_in_time_dimension(
+        self,
+        batch_size: int,
+        length: Optional[int] = None,
+        context: Optional[torch.Tensor] = None,
+        context_mask: Optional[torch.Tensor] = None,
+        conditions: Optional[torch.Tensor] = None,
+        return_all: bool = False,
+        number_of_chunks: int = 1,
+        guidance_fn: Optional[Callable] = None,
+        pbar: Optional[tqdm] = None,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
 
-    def _extend_x_dim(self, x: torch.Tensor) -> torch.Tensor:
-        """Extend the tensor by adding dimensions at the end to match x_stacked_shape."""
-        return rearrange(x, "... -> ..." + " 1" * len(self.hparams.x_shape))
-
-
-
-#    def _sample_all_videos(
-#        self, batch, batch_idx, namespace="validation"
-#    ) -> Optional[Dict[str, Tensor]]:
-#        xs, conditions, *_, gt_videos = batch
-#        all_videos: Dict[str, Tensor] = {"gt": xs}
-#
-#        for task in self.tasks:
-#            sample_fn = (
-#                self._predict_videos
-#                if task == "prediction"
-#                else self._interpolate_videos
-#            )
-#            all_videos[task] = sample_fn(xs, conditions=conditions)
-#
-#        # remove None values
-#        all_videos = {k: v for k, v in all_videos.items() if v is not None}
-#        # rearrange/unnormalize/detach the videos
-#        all_videos = {k: self._unnormalize_x(v).detach() for k, v in all_videos.items()}
-#        # decode latents if using latents
-#        if self.hparams.is_latent_diffusion:
-#            all_videos = {
-#                k: self._decode(v) if k != "gt" else gt_videos
-#                for k, v in all_videos.items()
-#            }
-#
-#        # # replace the context frames of video predictions with the ground truth
-#        if "prediction" in all_videos:
-#            all_videos["prediction"][:, : self.n_context_frames] = all_videos["gt"][
-#                :, : self.n_context_frames
-#            ]
-#        return all_videos
-#    
-#    def _predict_videos(
-#        self, xs: Tensor, conditions: Optional[Tensor] = None
-#    ) -> Tensor:
-#        """
-#        Predict the videos with the given context, using sliding window rollouts if necessary.
-#        Optionally, if cfg.tasks.prediction.keyframe_density < 1, predict the keyframes first,
-#        then interpolate the missing intermediate frames.
-#        """
-#        xs_pred = xs.clone() # b, t, c, h, w
-#
-#        #history_guidance = HistoryGuidance.from_config(
-#        #    config=self.cfg.tasks.prediction.history_guidance,
-#        #    timesteps=self.timesteps,
-#        #)
-#
-#        #density = self.cfg.tasks.prediction.keyframe_density or 1
-#        #if density > 1:
-#        #    raise ValueError("tasks.prediction.keyframe_density must be <= 1")
-#        #keyframe_indices = (
-#        #    torch.linspace(0, xs_pred.shape[1] - 1, round(density * xs_pred.shape[1]))
-#        #    .round()
-#        #    .long()
-#        #)
-#        #keyframe_indices = torch.cat(
-#        #    [torch.arange(self.n_context_tokens), keyframe_indices]
-#        #).unique()  # context frames are always keyframes
-#        #key_conditions = (
-#        #    conditions[:, keyframe_indices] if conditions is not None else None
-#        #)
-#
-#        # 1. Predict the keyframes
-#        xs_pred_key, *_ = self._predict_sequence(
-#            xs_pred[:, : self.n_context_tokens],
-#            length=len(keyframe_indices),
-#            conditions=key_conditions,
-#            history_guidance=history_guidance,
-#            reconstruction_guidance=self.cfg.diffusion.reconstruction_guidance,
-#            sliding_context_len=self.cfg.tasks.prediction.sliding_context_len
-#            or self.max_tokens // 2,
-#        )
-#        xs_pred[:, keyframe_indices] = xs_pred_key
-#        # if is_rank_zero: # uncomment to visualize history guidance
-#        #     history_guidance.log(logger=self.logger)
-#
-#        # 2. (Optional) Interpolate the intermediate frames
-#        if len(keyframe_indices) < xs_pred.shape[1]:
-#            context_mask = torch.zeros(xs_pred.shape[:2], device=self.device).bool()
-#            context_mask[:, keyframe_indices] = True
-#            xs_pred = self._interpolate_videos(
-#                context=xs_pred,
-#                context_mask=context_mask,
-#                conditions=conditions,
-#            )
-#
-#        return xs_pred
-#
-#    def _predict_sequence(
-#        self,
-#        context: torch.Tensor,
-#        length: Optional[int] = None,
-#        conditions: Optional[torch.Tensor] = None,
-#        guidance_fn: Optional[Callable] = None,
-#        reconstruction_guidance: float = 0.0,
-#        history_guidance = None,
-#        #history_guidance: Optional[HistoryGuidance] = None,
-#        sliding_context_len: Optional[int] = None,
-#        return_all: bool = False,
-#    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
-#        """
-#        Predict a sequence given context tokens at the beginning, using sliding window if necessary.
-#        Args
-#        ----
-#        context: torch.Tensor, Shape (batch_size, init_context_len, *self.x_shape)
-#            Initial context tokens to condition on
-#        length: Optional[int]
-#            Desired number of tokens in sampled sequence.
-#            If None, fall back to to self.max_tokens, and
-#            If bigger than self.max_tokens, sliding window sampling will be used.
-#        conditions: Optional[torch.Tensor], Shape (batch_size, conditions_len, ...)
-#            Unprocessed external conditions for sampling, e.g. action or text, optional
-#        guidance_fn: Optional[Callable]
-#            Guidance function for sampling
-#        reconstruction_guidance: float
-#            Scale of reconstruction guidance (from Video Diffusion Models Ho. et al.)
-#        history_guidance: Optional[HistoryGuidance]
-#            History guidance object that handles compositional generation
-#        sliding_context_len: Optional[int]
-#            Max context length when using sliding window. -1 to use max_tokens - 1.
-#            Has no influence when length <= self.max_tokens as no sliding window is needed.
-#        return_all: bool
-#            Whether to return all steps of the sampling process.
-#
-#        Returns
-#        -------
-#        xs_pred: torch.Tensor, Shape (batch_size, length, *self.x_shape)
-#            Predicted sequence with both context and generated tokens
-#        record: Optional[torch.Tensor], Shape (num_steps, batch_size, length, *self.x_shape)
-#            Record of all steps of the sampling process
-#        """
-#        if length is None:
-#            length = self.max_tokens
-#        if sliding_context_len is None:
-#            if self.max_tokens < length:
-#                raise ValueError(
-#                    "when length > max_tokens, sliding_context_len must be specified."
-#                )
-#            else:
-#                sliding_context_len = self.max_tokens - 1
-#        if sliding_context_len == -1:
-#            sliding_context_len = self.max_tokens - 1
-#
-#        batch_size, gt_len, *_ = context.shape
-#
-#        if sliding_context_len < gt_len:
-#            raise ValueError(
-#                "sliding_context_len is expected to be >= length of initial context,"
-#                f"got {sliding_context_len}. If you are trying to use max context, "
-#                "consider specifying sliding_context_len=-1."
-#            )
-#
-#        chunk_size = self.chunk_size if self.use_causal_mask else self.max_tokens
-#
-#        curr_token = gt_len
-#        xs_pred = context
-#        x_shape = self.x_shape
-#        record = None
-#        pbar = tqdm(
-#            total=self.sampling_timesteps
-#            * (
-#                1
-#                + (length - sliding_context_len - 1)
-#                // (self.max_tokens - sliding_context_len)
-#            ),
-#            initial=0,
-#            desc="Predicting with DFoT",
-#            leave=False,
-#        )
-#        while curr_token < length:
-#            if record is not None:
-#                raise ValueError("return_all is not supported if using sliding window.")
-#            # actual context depends on whether it's during sliding window or not
-#            # corner case at the beginning
-#            c = min(sliding_context_len, curr_token)
-#            # try biggest prediction chunk size
-#            h = min(length - curr_token, self.max_tokens - c)
-#            # chunk_size caps how many future tokens are diffused at once to save compute for causal model
-#            h = min(h, chunk_size) if chunk_size > 0 else h
-#            l = c + h
-#            pad = torch.zeros((batch_size, h, *x_shape))
-#            # context is last c tokens out of the sequence of generated/gt tokens
-#            # pad to length that's required by _sample_sequence
-#            context = torch.cat([xs_pred[:, -c:], pad.to(self.device)], 1)
-#            # calculate number of model generated tokens (not GT context tokens)
-#            generated_len = curr_token - max(curr_token - c, gt_len)
-#            # make context mask
-#            context_mask = torch.ones((batch_size, c), dtype=torch.long)
-#            if generated_len > 0:
-#                context_mask[:, -generated_len:] = 2
-#            pad = torch.zeros((batch_size, h), dtype=torch.long)
-#            context_mask = torch.cat([context_mask, pad.long()], 1).to(context.device)
-#
-#            cond_len = l if self.use_causal_mask else self.max_tokens
-#            cond_slice = None
-#            if conditions is not None:
-#                cond_slice = conditions[:, curr_token - c : curr_token - c + cond_len]
-#
-#            new_pred, record = self._sample_sequence(
-#                batch_size,
-#                length=l,
-#                context=context,
-#                context_mask=context_mask,
-#                conditions=cond_slice,
-#                guidance_fn=guidance_fn,
-#                reconstruction_guidance=reconstruction_guidance,
-#                history_guidance=history_guidance,
-#                return_all=return_all,
-#                pbar=pbar,
-#            )
-#            xs_pred = torch.cat([xs_pred, new_pred[:, -h:]], 1)
-#            curr_token = xs_pred.shape[1]
-#        pbar.close()
-#        return xs_pred, record
-#
-#    def _extend_x_dim(self, x: torch.Tensor) -> torch.Tensor:
-#        """Extend the tensor by adding dimensions at the end to match x_stacked_shape."""
-#        return rearrange(x, "... -> ..." + " 1" * len(self.x_shape))
-#
-#    def _sample_sequence(
-#        self,
-#        batch_size: int,
-#        length: Optional[int] = None,
-#        context: Optional[torch.Tensor] = None,
-#        context_mask: Optional[torch.Tensor] = None,
-#        conditions: Optional[torch.Tensor] = None,
-#        guidance_fn: Optional[Callable] = None,
-#        reconstruction_guidance: float = 0.0,
-#        #history_guidance: Optional[HistoryGuidance] = None,
-#        history_guidance = None,
-#        return_all: bool = False,
-#        pbar: Optional[tqdm] = None,
-#    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
-#        """
-#        The unified sampling method, with length up to maximum token size.
-#        context of length can be provided along with a mask to achieve conditioning.
-#
-#        Args
-#        ----
-#        batch_size: int
-#            Batch size of the sampling process
-#        length: Optional[int]
-#            Number of frames in sampled sequence
-#            If None, fall back to length of context, and then fall back to `self.max_tokens`
-#        context: Optional[torch.Tensor], Shape (batch_size, length, *self.x_shape)
-#            Context tokens to condition on. Assumed to be same across batch.
-#            Tokens that are specified as context by `context_mask` will be used for conditioning,
-#            and the rest will be discarded.
-#        context_mask: Optional[torch.Tensor], Shape (batch_size, length)
-#            Mask for context
-#            0 = To be generated, 1 = Ground truth context, 2 = Generated context
-#            Some sampling logic may discriminate between ground truth and generated context.
-#        conditions: Optional[torch.Tensor], Shape (batch_size, length (causal) or self.max_tokens (noncausal), ...)
-#            Unprocessed external conditions for sampling
-#        guidance_fn: Optional[Callable]
-#            Guidance function for sampling
-#        history_guidance: Optional[HistoryGuidance]
-#            History guidance object that handles compositional generation
-#        return_all: bool
-#            Whether to return all steps of the sampling process
-#        Returns
-#        -------
-#        xs_pred: torch.Tensor, Shape (batch_size, length, *self.x_shape)
-#            Complete sequence containing context and generated tokens
-#        record: Optional[torch.Tensor], Shape (num_steps, batch_size, length, *self.x_shape)
-#            All recorded intermediate results during the sampling process
-#        """
-#        x_shape = self.x_shape
-#
-#        if length is None:
-#            length = self.max_tokens if context is None else context.shape[1]
-#        if length > self.max_tokens:
-#            raise ValueError(
-#                f"length is expected to <={self.max_tokens}, got {length}."
-#            )
-#
-#        if context is not None:
-#            if context_mask is None:
-#                raise ValueError("context_mask must be provided if context is given.")
-#            if context.shape[0] != batch_size:
-#                raise ValueError(
-#                    f"context batch size is expected to be {batch_size} but got {context.shape[0]}."
-#                )
-#            if context.shape[1] != length:
-#                raise ValueError(
-#                    f"context length is expected to be {length} but got {context.shape[1]}."
-#                )
-#            if tuple(context.shape[2:]) != tuple(x_shape):
-#                raise ValueError(
-#                    f"context shape not compatible with x_stacked_shape {x_shape}."
-#                )
-#
-#        if context_mask is not None:
-#            if context is None:
-#                raise ValueError("context must be provided if context_mask is given. ")
-#            if context.shape[:2] != context_mask.shape:
-#                raise ValueError("context and context_mask must have the same shape.")
-#
-#        if conditions is not None:
-#            if self.use_causal_mask and conditions.shape[1] != length:
-#                raise ValueError(
-#                    f"for causal models, conditions length is expected to be {length}, got {conditions.shape[1]}."
-#                )
-#            elif not self.use_causal_mask and conditions.shape[1] != self.max_tokens:
-#                raise ValueError(
-#                    f"for noncausal models, conditions length is expected to be {self.max_tokens}, got {conditions.shape[1]}."
-#                )
-#
-#        horizon = length if self.use_causal_mask else self.max_tokens
-#        padding = horizon - length
-#        # create initial xs_pred with noise
-#        xs_pred = torch.randn(
-#            (batch_size, horizon, *x_shape),
-#            device=self.device,
-#            generator=self.generator,
-#        )
-#        xs_pred = torch.clamp(xs_pred, -self.clip_noise, self.clip_noise)
-#
-#        if context is None:
-#            # create empty context and zero context mask
-#            context = torch.zeros_like(xs_pred)
-#            context_mask = torch.zeros_like(
-#                (batch_size, horizon), dtype=torch.long, device=self.device
-#            )
-#        elif padding > 0:
-#            # pad context and context mask to reach horizon
-#            context_pad = torch.zeros(
-#                (batch_size, padding, *x_shape), device=self.device
-#            )
-#            # NOTE: In context mask, -1 = padding, 0 = to be generated, 1 = GT context, 2 = generated context
-#            context_mask_pad = -torch.ones(
-#                (batch_size, padding), dtype=torch.long, device=self.device
-#            )
-#            context = torch.cat([context, context_pad], 1)
-#            context_mask = torch.cat([context_mask, context_mask_pad], 1)
-#
-#        if history_guidance is None:
-#            # by default, use conditional sampling
-#            history_guidance = HistoryGuidance.conditional(
-#                timesteps=self.timesteps,
-#            )
-#
-#        # replace xs_pred's context frames with context
-#        xs_pred = torch.where(self._extend_x_dim(context_mask) >= 1, context, xs_pred)
-#
-#        # generate scheduling matrix
-#        scheduling_matrix = self._generate_scheduling_matrix(
-#            horizon - padding,
-#            padding,
-#        )
-#        scheduling_matrix = scheduling_matrix.to(self.device)
-#        scheduling_matrix = repeat(scheduling_matrix, "m t -> m b t", b=batch_size)
-#        # fill context tokens' noise levels as -1 in scheduling matrix
-#        if not self.is_full_sequence:
-#            scheduling_matrix = torch.where(
-#                context_mask[None] >= 1, -1, scheduling_matrix
-#            )
-#
-#        # prune scheduling matrix to remove identical adjacent rows
-#        diff = scheduling_matrix[1:] - scheduling_matrix[:-1]
-#        skip = torch.argmax((~reduce(diff == 0, "m b t -> m", torch.all)).float())
-#        scheduling_matrix = scheduling_matrix[skip:]
-#
-#        record = [] if return_all else None
-#
-#        if pbar is None:
-#            pbar = tqdm(
-#                total=scheduling_matrix.shape[0] - 1,
-#                initial=0,
-#                desc="Sampling with DFoT",
-#                leave=False,
-#            )
-#
-#        for m in range(scheduling_matrix.shape[0] - 1):
-#            from_noise_levels = scheduling_matrix[m]
-#            to_noise_levels = scheduling_matrix[m + 1]
-#
-#            # update context mask by changing 0 -> 2 for fully generated tokens
-#            context_mask = torch.where(
-#                torch.logical_and(context_mask == 0, from_noise_levels == -1),
-#                2,
-#                context_mask,
-#            )
-#
-#            # create a backup with all context tokens unmodified
-#            xs_pred_prev = xs_pred.clone()
-#            if return_all:
-#                record.append(xs_pred.clone())
-#
-#            conditions_mask = None
-#            with history_guidance(context_mask) as history_guidance_manager:
-#                nfe = history_guidance_manager.nfe
-#                pbar.set_postfix(NFE=nfe)
-#                xs_pred, from_noise_levels, to_noise_levels, conditions_mask = (
-#                    history_guidance_manager.prepare(
-#                        xs_pred,
-#                        from_noise_levels,
-#                        to_noise_levels,
-#                        replacement_fn=self.diffusion_model.q_sample,
-#                        replacement_only=self.is_full_sequence,
-#                    )
-#                )
-#
-#                if reconstruction_guidance > 0:
-#
-#                    def composed_guidance_fn(
-#                        xk: torch.Tensor,
-#                        pred_x0: torch.Tensor,
-#                        alpha_cumprod: torch.Tensor,
-#                    ) -> torch.Tensor:
-#                        loss = (
-#                            F.mse_loss(pred_x0, context, reduction="none")
-#                            * alpha_cumprod.sqrt()
-#                        )
-#                        _context_mask = rearrange(
-#                            context_mask.bool(),
-#                            "b t -> b t" + " 1" * len(x_shape),
-#                        )
-#                        # scale inversely proportional to the number of context frames
-#                        loss = torch.sum(
-#                            loss
-#                            * _context_mask
-#                            / _context_mask.sum(dim=1, keepdim=True).clamp(min=1),
-#                        )
-#                        likelihood = -reconstruction_guidance * 0.5 * loss
-#                        return likelihood
-#
-#                else:
-#                    composed_guidance_fn = guidance_fn
-#
-#                # update xs_pred by DDIM or DDPM sampling
-#                xs_pred = self.diffusion_model.sample_step(
-#                    xs_pred,
-#                    from_noise_levels,
-#                    to_noise_levels,
-#                    self._process_conditions(
-#                        (
-#                            repeat(
-#                                conditions,
-#                                "b ... -> (b nfe) ...",
-#                                nfe=nfe,
-#                            ).clone()
-#                            if conditions is not None
-#                            else None
-#                        ),
-#                        from_noise_levels,
-#                    ),
-#                    conditions_mask,
-#                    guidance_fn=composed_guidance_fn,
-#                )
-#
-#                xs_pred = history_guidance_manager.compose(xs_pred)
-#
-#            # only replace the tokens being generated (revert context tokens)
-#            xs_pred = torch.where(
-#                self._extend_x_dim(context_mask) == 0, xs_pred, xs_pred_prev
-#            )
-#            pbar.update(1)
-#
-#        if return_all:
-#            record.append(xs_pred.clone())
-#            record = torch.stack(record)
-#        if padding > 0:
-#            xs_pred = xs_pred[:, :-padding]
-#            record = record[:, :, :-padding] if return_all else None
-#
-#        return xs_pred, record
+        x_shape = self.hparams.x_shape
+        number_of_tokens = self.max_tokens * number_of_chunks
+        padding = number_of_tokens - length
+        # pad context and context_mask
+        if context is not None:
+            context = torch.cat(
+                [
+                    context,
+                    torch.zeros((batch_size, padding, *x_shape), device=self.device, dtype=context.dtype),
+                ],
+                dim=1,
+            )
+        if context_mask is not None:
+            context_mask = F.pad(context_mask, (0, padding))
 
 
+        scheduling_matrix = self._generate_scheduling_matrix(
+            #length,
+            number_of_tokens,
+            0,
+        )
+        scheduling_matrix = scheduling_matrix.to(self.device)
+        scheduling_matrix = repeat(scheduling_matrix, "m t -> m b t", b=batch_size)
 
+        # prune scheduling matrix to remove identical adjacent rows
+        diff = scheduling_matrix[1:] - scheduling_matrix[:-1]
+        skip = torch.argmax((~reduce(diff == 0, "m b t -> m", torch.all)).float())
+        scheduling_matrix = scheduling_matrix[skip:]
 
-    @torch.no_grad()
-    def validation_step2(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> None:
-        # -------------------------
-        # 1) Compute the validation loss on every batch
-        # -------------------------
-        x = batch["videos"].to(self.device)  # shape: (B, T, C, H, W)
-        x = x * 2 - 1
-        x_gt = x.clone()  # keep a copy
+        # Prepare the record list if we want all intermediate steps
+        record = [] if return_all else None
 
-        # Diffusion loss (or any other training-like loss)
-        _, diffusion_loss, _ = self.forward(x_gt, loss=True)
-        
-        # Update your running metric and log once per step or once per epoch
-        self.val_loss.update(diffusion_loss)
-        self.log("val/loss", diffusion_loss, on_step=False, on_epoch=True, prog_bar=True)
+        # Initial random noise
+        xs_pred = torch.randn(
+            (batch_size, number_of_chunks * self.max_tokens, *x_shape),
+            #(batch_size, length, *x_shape),
+            device=self.device,
+            generator=self.generator,
+        )
+        xs_pred = torch.clamp(xs_pred, -self.hparams.clip_noise, self.hparams.clip_noise)
+        sliding_window_context_length = self.hparams.sliding_context_len # the the overlap between the context and the generated frames
+        h = self.max_tokens - sliding_window_context_length
+        l = sliding_window_context_length + h
 
-        # -------------------------
-        # 2) Generate a sample video on the first batch
-        # -------------------------
-
-        if batch_idx == 0:
-            self._generate_and_log_video(x_gt)  # e.g. put your generation code into a helper
-    
-    def on_validation_end(self):
-        avg_loss = self.val_loss.compute()
-        #self.log("val/loss", avg_loss, prog_bar=True)
-        self.logger.experiment.log({"val/loss": avg_loss, "global_step": self.global_step})
-
-        self.val_loss.reset()
-            
-
-    def _generate_and_log_video(self, x):
-        b, t, c, h, w = x.shape
-        y = torch.zeros((b,), device=x.device, dtype=torch.long)
-
-        # Prepare the scheduler for inference
-        self.scheduler.set_timesteps(self.hparams.num_inference_steps)
-        timesteps = self.scheduler.timesteps  # e.g. something like torch.arange()
-
-        # We'll store generated frames here and then concat along time dimension
-        generated_frames = []
-        # shape (B, C, 1, H, W)
-        x_gen = torch.randn(b, c, 1, h, w, device=x.device)
-        in_gen_dict = {i: x_gen for i in range(t)}
-        for step_t in timesteps:
-            memory_states = None
-            # Diffusion reverse loop (for each inference step)
-            for frame_idx in range(t):
-                # Prepare the second chunk (ground-truth only for the first frame)
-                x_gen = in_gen_dict[frame_idx]
-                if frame_idx == 0:
-                    # Mimic training: cat the real first frame in the second chunk
-                    # shape: (B, c, 1, H, W)
-                    first_frame = x[:, 0].unsqueeze(2)  # ground-truth frame 0
-                    # => (B, C, 1, H, W)
-                    x_in = torch.cat([x_gen, first_frame], dim=1)  # => (B, 2*C, 1, H, W)
-                else:
-                    # For subsequent frames, we cat all zeros
-                    zeros_ = torch.zeros_like(x_gen)  # (B, C, 1, H, W)
-                    x_in = torch.cat([x_gen, zeros_], dim=1)      # => (B, 2*C, 1, H, W)
-
-                # Permute to (B, 1, 2*C, H, W), matching your model's forward usage
-                x_in = x_in.permute(0, 2, 1, 3, 4)
-
-                # Model forward
-                t_tensor = torch.full((b,), step_t, device=x.device, dtype=torch.long)
-                model_output, memory_states = self.model.forward(x_in, t_tensor, cond=y, cache_params=memory_states, use_cache=True, run=frame_idx)
-
-                # Take one step in reverse diffusion
-                model_output = model_output.permute(0, 2, 1, 3, 4)
-                out = self.scheduler.step(model_output, step_t, x_gen)
-                x_gen = out.prev_sample  # shape still (B, C, 1, H, W)
-                in_gen_dict[frame_idx] = x_gen
-
-            # Now we have the final reversed sample for this frame
-            #generated_frames.append(x_gen)
-        generated_frames = [in_gen_dict[i] for i in range(t)]
-        # Concatenate all frames along time dimension => (B, C, T, H, W)
-        generated_video = torch.cat(generated_frames, dim=2)
-
-        # (Optional) Log or visualize the generated video
-        # For logging, many prefer the shape (B, T, C, H, W),
-        # so permute back: (B, T, C, H, W)
-        generated_video_for_logging = generated_video #.permute(0, 2, 1, 3, 4)
-
-        # Example logging with W&B or another logger:
-        for i in range(min(generated_video_for_logging.shape[0], 32)):  # up to 4 examples
-            vid = preprocess_and_format_video(generated_video_for_logging[i])
-            if self.logger is not None:
-                self.logger.experiment.log(
-                    {f"val/generated_video_{i}": wandb.Video(vid, fps=1, format="gif")}
-                )
-
-    def test_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> None:
-        """
-        Test step: Similar to training/validation.
-        """
-        x = batch["video"].to(self.device)
-        noise = torch.randn_like(x)
-        batch_size = x.shape[0]
-        timesteps = torch.randint(
-            0, self.ddpm_scheduler.num_train_timesteps, (batch_size,), device=x.device
-        ).long()
-        x_noisy = self.ddpm_scheduler.add_noise(x, noise, timesteps)
-        noise_pred = self.forward(x_noisy, timesteps)
-        loss = F.mse_loss(noise_pred, noise)
-        self.test_loss.update(loss)
-        self.log("test/loss", loss, on_step=False, on_epoch=True, prog_bar=True)
-    
-
-
-    def log_gradient_stats(self):
-        """Log gradient statistics such as the mean or std of norm."""
-
-        with torch.no_grad():
-            grad_norms = []
-            gpr = []  # gradient-to-parameter ratio
-            for param in self.parameters():
-                if param.grad is not None:
-                    grad_norms.append(torch.norm(param.grad).item())
-                    gpr.append(torch.norm(param.grad) / torch.norm(param))
-            if len(grad_norms) == 0:
-                return
-            grad_norms = torch.tensor(grad_norms)
-            gpr = torch.tensor(gpr)
-            self.log_dict(
-                {
-                    "train/grad_norm/min": grad_norms.min(),
-                    "train/grad_norm/max": grad_norms.max(),
-                    "train/grad_norm/std": grad_norms.std(),
-                    "train/grad_norm/mean": grad_norms.mean(),
-                    "train/grad_norm/median": torch.median(grad_norms),
-                    "train/gpr/min": gpr.min(),
-                    "train/gpr/max": gpr.max(),
-                    "train/gpr/std": gpr.std(),
-                    "train/gpr/mean": gpr.mean(),
-                    "train/gpr/median": torch.median(gpr),
-                }
+        # Create a single progress bar if none is given
+        if pbar is None:
+            pbar = tqdm(
+                total=scheduling_matrix.shape[0] - 1,
+                initial=0,
+                desc="Sampling with DFoT",
+                leave=False,
             )
 
+        for m in range(scheduling_matrix.shape[0] - 1):
+            from_noise_levels_full = scheduling_matrix[m]     # shape: [b, t]
+            to_noise_levels_full = scheduling_matrix[m + 1]   # shape: [b, t]
+            number_of_generations = number_of_chunks
+
+            if return_all:
+                record.append(xs_pred.clone())
+
+            for i in range(number_of_generations):
+                # in sliding window fashion
+                idx = self.max_tokens - sliding_window_context_length if i > 0 else self.max_tokens
+                from_noise_levels = from_noise_levels_full[:, i*idx:(i+1)*idx]
+                to_noise_levels   = to_noise_levels_full[:, i*idx:(i+1)*idx]
+                context_in = context[:, i*idx:(i+1)*idx]
+                context_mask_in = context_mask[:, i*idx:(i+1)*idx]
+                xs_pred_in = xs_pred[:, i*idx:(i+1)*idx]
+                conditions_in = conditions[:, i*idx:(i+1)*idx] if conditions is not None else None
+                
+                # If context is None, create a dummy context + mask, also if we are not in the first iteration
+                if context is None:
+                    context_in = torch.zeros_like(xs_pred)
+                    context_mask_in = torch.zeros(
+                        (batch_size, self.max_tokens),
+                        dtype=torch.long,
+                        device=self.device
+                    )
+                    # context mask is 1 for sliding_window_context_length frames and 0 for the rest
+                context_mask_in = torch.cat(
+                    [
+                        torch.ones((batch_size, sliding_window_context_length), dtype=torch.long, device=self.device),
+                        torch.zeros((batch_size, h), dtype=torch.long, device=self.device),
+                    ],
+                    dim=1,
+                )
+
+                xs_pred_prev_in = xs_pred_in.clone()
+                # If we do NOT concatenate context into the diffusion model's channels,
+                # we literally replace the context frames in xs_pred with the given context
+                if not self.hparams.cat_context_in_c_dim or sliding_window_context_length > 0:
+                    xs_pred_in = torch.where(self._extend_x_dim(context_mask_in) >= 1, context_in, xs_pred_in)
+
+                # Make a backup for context tokens so we can revert them after diffusion
+
+                # If we DO concatenate context in c-dim, cat them here
+                if self.hparams.cat_context_in_c_dim:
+                    xs_pred_in = torch.cat([xs_pred_in, context_in], dim=2)  # depends on your exact shape
+
+                # Single diffusion step from one noise level to another
+                xs_pred_in, aux_output = self.diffusion_model.sample_step(
+                    xs_pred_in,
+                    from_noise_levels,
+                    to_noise_levels,
+                    self._process_conditions(conditions_in, from_noise_levels),
+                    #conditions_mask=None,
+                    guidance_fn=guidance_fn,
+                )
+
+                # If we concatenated context channels, revert the shape
+                if self.hparams.cat_context_in_c_dim:
+                    # removing last channels
+                    xs_pred_in = xs_pred_in[:, :, : x_shape[0]]
+
+                # Revert context tokens to their original values
+                xs_pred_in = torch.where(
+                    self._extend_x_dim(context_mask_in) == 0, xs_pred_in, xs_pred_prev_in
+                )
+                xs_pred[:, i*idx:(i+1)*idx] = xs_pred_in
+
+        return xs_pred[:, :length], record
+
+
+    def _extend_x_dim(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Extend the 2D [batch, tokens] mask to match the shape of your x_shape (i.e., [batch, tokens, c, h, w]).
+        """
+        return rearrange(
+            x,
+            "... -> ... "
+            + "1 " * len(self.hparams.x_shape),  # e.g. " -> ... 1 1 1" if x_shape=[3,64,64]
+        )
+
+    # ---------------------------------------------------------------------
+    # Example pyramid scheduling (if your "autoregressive" needs it)
+    # ---------------------------------------------------------------------
+    def _generate_pyramid_scheduling_matrix(self, horizon: int, timesteps: int) -> np.ndarray:
+        """
+        Example “autoregressive” or “pyramid” scheduling logic:
+        Decreasing timesteps on smaller chunks, etc.
+        Feel free to replace with your own logic.
+        """
+        # Just a toy example: each column has a line from timesteps->0,
+        # but we skip more steps as we move right, forming a “pyramid” shape.
+        matrix = []
+        for col in range(horizon):
+            steps = np.linspace(timesteps, 0, timesteps - col if (timesteps - col) > 0 else 1)
+            matrix_col = np.round(steps).astype(int)
+            # pad the top so all columns have the same #rows:
+            row_pad = timesteps + 1 - len(matrix_col)
+            matrix_col = np.pad(matrix_col, (row_pad, 0), constant_values=-1)
+            if len(matrix) == 0:
+                matrix = matrix_col[:, None]
+            else:
+                matrix = np.concatenate([matrix, matrix_col[:, None]], axis=1)
+        # Replace negative with 0 at the top:
+        matrix = np.where(matrix < 0, 0, matrix)
+        return matrix
+
+    
 
     # ---------------------------------------------------------------------
     # Latent & Normalization Utils
@@ -1809,9 +1415,7 @@ class DiffusionModelTrainer(BaseLightningTrainer):
         return rearrange(torch.cat(outputs, 0), f"b c t h w -> {shape}")
 
     def _encode(self, x: Tensor, shape: str = "b t c h w") -> Tensor:
-        return self._run_vae(
-            x, shape, lambda y: self.vae.encode(2.0 * y - 1.0).sample()
-        )
+        return self._run_vae(x, shape, lambda y: self.vae.encode(2.0 * y - 1.0).sample())
 
     def _decode(self, latents: Tensor, shape: str = "b t c h w") -> Tensor:
         return self._run_vae(
@@ -1838,30 +1442,29 @@ class DiffusionModelTrainer(BaseLightningTrainer):
         std = self.data_std.reshape(shape)
         return xs * std + mean
 
-
     # ---------------------------------------------------------------------
     # Checkpoint Utils
     # ---------------------------------------------------------------------
 
     def _uncompile_checkpoint(self, checkpoint: Dict[str, Any]):
-        """Converts the state_dict if self.model is compiled, to uncompiled."""
-        if self.compile_model:
+        """Converts the state_dict if self.diffusion_model is compiled, to uncompiled."""
+        if self.compile:
             checkpoint["state_dict"] = {
-                k.replace("model._orig_mod.", "model."): v
+                k.replace("diffusion_model._orig_mod.", "diffusion_model."): v
                 for k, v in checkpoint["state_dict"].items()
             }
 
     def _compile_checkpoint(self, checkpoint: Dict[str, Any]):
         """Converts the state_dict to the format expected by the compiled model."""
-        if self.compile_model:
+        if self.compile:
             checkpoint["state_dict"] = {
-                k.replace("model.", "model._orig_mod."): v
+                k.replace("diffusion_model.", "diffusion_model._orig_mod."): v
                 for k, v in checkpoint["state_dict"].items()
             }
 
     def _should_include_in_checkpoint(self, key: str) -> bool:
-        return key.startswith("model.model") or key.startswith(
-            "model._orig_mod.model"
+        return key.startswith("diffusion_model.model") or key.startswith(
+            "diffusion_model._orig_mod.model"
         )
 
     def on_save_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
@@ -1920,7 +1523,7 @@ class DiffusionModelTrainer(BaseLightningTrainer):
                 cyan("The following keys are not found in the checkpoint:"),
                 missing_keys,
             )
-            if self.hparams.strict_load:
+            if self.cfg.checkpoint.strict:
                 raise ValueError(
                     "Thus, the checkpoint cannot be loaded. To ignore this error, turn off strict checkpoint loading by setting `algorithm.checkpoint.strict=False`."
                 )
@@ -1942,13 +1545,14 @@ class DiffusionModelTrainer(BaseLightningTrainer):
             return
         ema_weights = checkpoint["optimizer_states"][0]["ema"]
         parameter_keys = [
-            "model." + k for k, _ in self.model.named_parameters()
+            "diffusion_model." + k for k, _ in self.diffusion_model.named_parameters()
         ]
         assert len(parameter_keys) == len(
             ema_weights
         ), "Number of original weights and EMA weights do not match."
         for key, weight in zip(parameter_keys, ema_weights):
             checkpoint["state_dict"][key] = weight
+
 
 
 ###############################################################################
@@ -1961,8 +1565,11 @@ if __name__ == "__main__":
 
     from src.models.components.dit import DiT_S_8
     from src.models.components.autoencoder.simple_autoencoder import AutoEncoder
+
     autoencoder = AutoEncoder(in_channels=3, latent_dim=4, hidden_size=64, downsampling_factor=4)
-    model = DiT_S_8(in_channels=8, input_size=16, out_channels=4, num_classes=10, autoencoder=autoencoder)
+    model = DiT_S_8(
+        in_channels=8, input_size=16, out_channels=4, num_classes=10, autoencoder=autoencoder
+    )
     optimizer = torch.optim.Adam
 
     scheduler = DDPMScheduler(
@@ -1988,18 +1595,20 @@ if __name__ == "__main__":
         transform=None,
     )
 
-
     from torch.utils.data import DataLoader
 
     loader = DataLoader(dataset, batch_size=2, num_workers=8, shuffle=True)
     batch = next(iter(loader))
 
-    #loss = diffusion_trainer.training_step(batch, batch_idx=0)
+    # loss = diffusion_trainer.training_step(batch, batch_idx=0)
     val = diffusion_trainer.validation_step(batch, batch_idx=0)
     from lightning import Trainer
 
     trainer = Trainer(devices=1, num_sanity_val_steps=1, val_check_interval=1)
-    trainer.fit(diffusion_trainer, loader,)
+    trainer.fit(
+        diffusion_trainer,
+        loader,
+    )
 
     # Create a dummy video batch.
     # For example, batch_size=16, channels=1, frames=16, height=64, width=64.
