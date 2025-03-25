@@ -33,6 +33,7 @@ MNIST
 wandb
 lightning_logs
 huggingface
+*.mp4
 
 # PyInstaller
 #  Usually these files are written by a python script from a template

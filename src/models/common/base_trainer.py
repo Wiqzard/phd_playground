@@ -3,6 +3,7 @@ import warnings
 from typing import Any, Union, Sequence, Dict, List, Tuple
 from lightning.pytorch.utilities.types import STEP_OUTPUT
 from lightning_utilities.core.apply_func import apply_to_collection
+
 from omegaconf import DictConfig
 import lightning.pytorch as pl
 import torch

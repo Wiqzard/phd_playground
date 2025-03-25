@@ -1,11 +1,11 @@
-from typing import Any, Dict, Tuple, Optional
+from typing import Any, Dict, Tuple, Optional, List
 from itertools import accumulate
 import random
 from omegaconf import DictConfig, open_dict
 import torch
 from einops import rearrange
 from lightning.pytorch.utilities.types import STEP_OUTPUT, OptimizerLRScheduler
-from src.models.base_trainer import BasePytorchAlgo
+from src.models.common.base_trainer import BaseLightningTrainer
 from src.models.metrics.video import (
     VideoMetric,
     SharedVideoMetricModelRegistry,
@@ -16,21 +16,29 @@ from ..common.losses import LPIPSWithDiscriminator3D, warmup
 from .model import VideoVAE
 
 
-class VideoVAETrainer(BasePytorchAlgo):
+class VideoVAETrainer(BaseLightningTrainer):
     def __init__(
         self,
-        cfg: DictConfig,
+        lr: float,
+        disc_start: int,
+        warmup_steps: int,
+        gradient_clip_val: Optional[float],
+        video_length_probs: List[float],
+        video_lengths: List[int],
+        validation_video_lengths: List[int],
     ):
-        self.lr = cfg.lr
-        self.disc_start = cfg.loss.disc_start
-        self.warmup_steps = cfg.training.warmup_steps
-        self.gradient_clip_val = cfg.training.gradient_clip_val
-        self.video_length_probs = list(accumulate(cfg.training.video_length_probs))
+        
+        self.lr = lr
+        self.disc_start = disc_start
+        self.warmup_steps = warmup_steps
+        self.gradient_clip_val = gradient_clip_val
+        self.video_length_probs = list(accumulate(video_length_probs))
         assert self.video_length_probs[-1] == 1.0, "video_length_probs must sum to 1"
-        self.video_lengths = cfg.training.video_lengths
-        self.validation_video_lengths = cfg.validation.video_lengths
+        self.video_lengths = video_lengths
+        self.validation_video_lengths = validation_video_lengths
         self.num_logged_videos = [0] * len(self.validation_video_lengths)
-        super().__init__(cfg)
+        super().__init__()
+
 
     def _build_model(self):
         with open_dict(self.cfg):

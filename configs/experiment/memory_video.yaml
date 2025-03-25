@@ -1,11 +1,11 @@
 # @package _global_
 
 defaults:
-  - override /data: memory 
+  - override /data: memory_test
   - override /model: ddpm_video
   - override /callbacks: default
-  - override /trainer: gpu
-  #- override /trainer:  ddp 
+  #- override /trainer: gpu
+  - override /trainer:  ddp 
   - override /logger: wandb
   - override /paths: default
   #- override /debug: overfit
@@ -26,29 +26,28 @@ trainer:
   min_epochs: 10
   max_epochs: 1000
   gradient_clip_val: 1 
-  val_check_interval: 100 #500 #00 #0 #500 
-  
-
+  val_check_interval: 30 #500 #00 #0 #500 
+  devices: 2
   check_val_every_n_epoch:  #5
   #limit_train_batches: 1
   limit_val_batches: 1 #20
-  
-
   log_every_n_steps: 1
   num_sanity_val_steps: 1
-  
   #overfit_batches: 1
   precision: #bf16-mixed #null #fp32 #bf16-mixed
-  ###
-  ###
-  ###
-  ###
-  ###
 
 #paths:
 #  data_dir: /data/cvg/sebastian/memory_maze/memory-maze-9x9 
   
 #ckpt_path: logs/train/runs/2025-02-21_22-04-15/checkpoints/last.ckpt  # null
+data:
+  batch_size: 16 #64 #16 #8 #16 #32 #1 #32 #32 #64 
+  num_workers: 32 #16
+  dataset_cls:
+    n_frames: 9 #10 #5 #25 #5
+    max_frames: 9 #5 # 25 #5
+    context_length: 1 #5 #25 #5
+    latent_downsampling_factor: [1, 1]
 
 model:
   ckpt_path: #logs/train/runs/2025-03-16_19-48-49/checkpoints/last.ckpt #null #logs/train/runs/2025-02-21_22-04-15/checkpoints/last.ckpt  # null
@@ -56,13 +55,17 @@ model:
   compile_model:  False #true_without_ddp_optimizer # True
   batch_size: ${data.batch_size}
 
-  data_mean: 0.5
-  data_std: 0.5
+  data_mean: ${data.dataset_cls.data_mean} 
+  data_std: ${data.dataset_cls.data_mean} 
 
   # VAE Configuration
   is_latent_diffusion: False
   is_latent_online: False
   latent_downsampling_factor: [1, 1]
+  latent_num_channels: 4
+  vae_pretrained_path: 
+  vae_use_fp16: False
+  vae_vae_pretrained_kwargs: {}
 
 
   # Metrics Configuration
@@ -76,22 +79,24 @@ model:
   # Logging Configuration
   log_grad_norm_freq: 0 #100 #${trainer.log_every_n_steps}
   log_deterministic: False
-  log_sanity_generation: True #False
-  log_max_num_videos: 32
+  log_sanity_generation: True #True #False
+  log_max_num_videos: 128 #64 #16 #32
+  log_fps: 2
 
 
   # General Configuration
-  x_shape: ${data.observation_shape}
-  n_frames: ${data.n_frames} # Number of frames to be used for generating videos 
-  max_frames: ${data.max_frames} # ... during training
-  context_frames: ${data.context_length} # number of context frames
+  x_shape: ${data.dataset_cls.observation_shape}
+  n_frames: ${data.dataset_cls.n_frames} # Number of frames to be used for generating videos 
+  max_frames: ${data.dataset_cls.max_frames} # ... during training
+  attention_window_size: 3
+  context_frames: ${data.dataset_cls.context_length} # number of context frames
 
   # Generation Configuration
-  sliding_context_len: 1  # if 0 only first iteration has context_frames
+  sliding_context_len: 0  # if 0 only first iteration has context_frames
   #context_frames_in_autoregressive_prediction: 0 # the amount of context frames to be used in autoregressive prediction (after the first iteration)
-  sampling_timesteps: 10
+  sampling_timesteps: 5
   cat_context_in_c_dim: True
-  generate_in_noise_dim: True #True #True
+  generate_in_noise_dim: False #True #True #True
 
   #use_causal_mask: True #### 
   #clip_noise: 20 
@@ -116,14 +121,14 @@ model:
     _target_: src.models.components.diffusion.DiscreteDiffusion #ContinuousDiffusion 
     model: 
       _target_: insert_memory.MemoryDiT3D 
-      x_shape: ${data.observation_shape}
+      x_shape: ${data.dataset_cls.observation_shape}
       cat_conditioning: ${model.cat_context_in_c_dim}
-      max_tokens: ${data.max_frames}
+      max_tokens: ${model.attention_window_size} #${data.max_frames}
       external_cond_dim: 0
       hidden_size: 192
       patch_size: 4
       variant: full
-      pos_emb_type: rope_3d #learned_3d
+      pos_emb_type: sinusoidal_1d #learned_1d # rope_3d #learned_3d
       depth: 12
       num_heads: 4
       mlp_ratio: 4
@@ -134,7 +139,7 @@ model:
       chunk_size: 256
       batch_size: 256
       depth_memory: 2
-      memory_layer_indices: [1, 3, 5, 7, 9]
+      memory_layer_indices: [1, 5, 9]
       momentum: False #True
     #x_shape: ${data.observation_shape}
     #external_cond_dim: ${model.external_cond_dim}
@@ -157,31 +162,6 @@ model:
     # (For full sequence diffusion)
     reconstruction_guidance: 0.0
 
-    
-
-  #model:
-  #  _target_: insert_memory.MemoryDiT3D 
-  #  x_shape: ${data.observation_shape}
-  #  cat_conditioning: ${model.cat_context_in_c_dim}
-  #  max_tokens: ${data.max_frames}
-  #  external_cond_dim: 0
-  #  hidden_size: 192
-  #  patch_size: 4
-  #  variant: full
-  #  pos_emb_type: rope_3d #learned_3d
-  #  depth: 12
-  #  num_heads: 4
-  #  mlp_ratio: 4
-  #  use_gradient_checkpointing: False
-  #  use_fourier_noise_embedding: False
-  #  external_cond_dropout: 0.0
-  #  learn_sigma: False
-  #  chunk_size: 256
-  #  batch_size: 256
-  #  depth_memory: 2
-  #  memory_layer_indices: [1, 3, 5, 7, 9]
-  #  momentum: True
-
     #_target_: insert_memory.DiT3D #TTT #src.models.components.dit.DiT # _S_4
     #in_channels: 6 #8
     #out_channels: 3 #4
@@ -195,10 +175,11 @@ model:
     #batch_size: 256 #32 #64 #128 # actual splitting
     #chunk_size: 256 
 
+
   optimizer:
     _target_: torch.optim.AdamW
     _partial_: true
-    lr: 0.0002 #0.0001
+    lr: 0.0002 #2 #0.0001
 
   lr_scheduler:
     _target_: torch.optim.lr_scheduler.LinearLR
@@ -221,13 +202,6 @@ callbacks:
     monitor: "prediction/VideoMetricType.MSE"
     mode: "min"
   
-data:
-  batch_size: 16 #8 #16 #32 #1 #32 #32 #64 
-  num_workers: 32 #16
-  n_frames: 5 #5 #25 #5
-  max_frames: 2 #5 # 25 #5
-  context_length: 1 #5 #25 #5
-  latent_downsampling_factor: [1, 1]
 
 logger:
   wandb:

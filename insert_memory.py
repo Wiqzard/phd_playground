@@ -215,7 +215,7 @@ class MemoryDiT3D(BaseBackbone):
         chunk_size: int = 16,
         batch_size: int = 16,
         depth_memory: int = 2,
-        memory_layer_indices: list = [1, 3, 5, 9],
+        memory_layer_indices: list = None, #[1, 3, 5, 9],
         momentum: bool = True,
     ):
 
@@ -230,6 +230,8 @@ class MemoryDiT3D(BaseBackbone):
             use_fourier_noise_embedding=use_fourier_noise_embedding,
             external_cond_dropout=external_cond_dropout,
         )
+        if memory_layer_indices is None:
+            memory_layer_indices = []
 
         channels, resolution, *_ = x_shape
         self.cat_conditioning = cat_conditioning
@@ -318,9 +320,9 @@ class MemoryDiT3D(BaseBackbone):
             ]
         )
 
-        assert (
-            max(memory_layer_indices) < depth  
-        ), f"Memory slots must be less than the depth of the model ({depth}) but got {memory_slots}"
+        #assert (
+        #    max(memory_layer_indices) < depth  
+        #), f"Memory slots must be less than the depth of the model ({depth}) but got {memory_slots}"
 
         self.memory_layer_indices = memory_layer_indices
         self.memory_layers = torch.nn.ModuleList([])
@@ -337,6 +339,7 @@ class MemoryDiT3D(BaseBackbone):
                             qkv_receives_diff_views=False,
                             use_accelerated_scan=False,
                             default_step_transform_max_lr=1e-1,
+                            max_grad_norm=1,
                         ),
                         AdaLayerNormZero(hidden_size)
                     ]

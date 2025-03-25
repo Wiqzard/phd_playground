@@ -217,7 +217,7 @@ def default_adaptive_step_transform(adaptive_step, max_lr = 1e-2):
 def default_loss_fn(pred, target):
     return (pred - target).pow(2).mean(dim = -1)
 
-class NeuralMemoryLeg(Module):
+class NeuralMemory(Module):
     def __init__(
         self,
         dim,
@@ -1082,7 +1082,7 @@ class Gate(nn.Module):
         return weights.type_as(x), indices
 
 
-class NeuralMemory(Module):
+class NeuralMemoryMOE(Module):
     def __init__(
         self,
         dim,

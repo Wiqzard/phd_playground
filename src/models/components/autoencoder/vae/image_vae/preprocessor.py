@@ -3,26 +3,27 @@ from omegaconf import DictConfig
 import torch
 from einops import rearrange
 from lightning.pytorch.utilities.types import STEP_OUTPUT
-from algorithms.common.base_pytorch_algo import BasePytorchAlgo
+from src.models.common.base_trainer import BaseLightningTrainer
 from utils.storage_utils import safe_torch_save
 from utils.logging_utils import log_video
 from ..common.distribution import DiagonalGaussianDistribution
 from .trainer import ImageVAE
 
 
-class ImageVAEPreprocessor(BasePytorchAlgo):
+class ImageVAEPreprocessor(BaseLightningTrainer):
     """
     An algorithm for preprocessing videos to latents using a pretrained ImageVAE model.
     """
 
-    def __init__(self, cfg: DictConfig):
-        self.pretrained_path = cfg.pretrained_path
-        self.pretrained_kwargs = cfg.pretrained_kwargs
-        self.use_fp16 = cfg.precision == "16-true"
-        self.max_encode_length = cfg.max_encode_length
-        self.max_decode_length = cfg.logging.max_video_length
-        self.log_every_n_batch = cfg.logging.every_n_batch
-        super().__init__(cfg)
+    def __init__(self, pretrained_path: str, pretrained_kwargs: DictConfig, precision: str, max_encode_length: int, max_video_length: int, every_n_batch: int):
+        self.pretrained_path = pretrained_path
+        self.pretrained_kwargs = pretrained_kwargs
+        self.use_fp16 = precision == "16-true"
+        self.max_encode_length = max_encode_length
+        self.max_decode_length = max_video_length
+        self.log_every_n_batch = every_n_batch
+        super().__init__()
+
 
     def _build_model(self):
         self.vae = ImageVAE.from_pretrained(

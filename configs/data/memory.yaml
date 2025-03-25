@@ -2,7 +2,7 @@
 #save_dir: /data/cvg/sebastian/minecraft_simple 
 #_target_:  src.data.video.base_video.BaseAdvancedVideoDataset #MinecraftAdvancedVideoDataset
 
-_target_:  src.data.video.memory.MemoryDataModule #MinecraftAdvancedVideoDataset
+_target_:  src.data.video.memory_cards_video_dataset.MemoryDataModule #MinecraftAdvancedVideoDataset
 save_dir: /data/cvg/sebastian/memory_datasets_mp4/ #/data/cvg/sebastian/minecraft_simple 
 
 latent_enable: False # Whether to use latents
@@ -23,6 +23,9 @@ context_length: 1 #25
 resolution: 64 #256
 observation_shape: [3, "${data.resolution}", "${data.resolution}"]
 
-#data_mean: [[[0.557]], [[0.222]], [[0.416]], [[-0.847]]]
-#data_std: [[[4.268]], [[4.953]], [[5.722]], [[7.336]]]
+data_mean: [[[0.5]], [[0.5]], [[0.5]]] # [[[0.557]], [[0.222]], [[0.416]], [[-0.847]]]
+data_std: [[[0.5]], [[0.5]], [[0.5]]]  #[[4.268]], [[4.953]], [[5.722]], [[7.336]]]
 external_cond_dim: 4
+
+batch_size: 16
+num_workers: 16

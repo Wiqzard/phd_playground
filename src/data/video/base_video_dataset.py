@@ -41,7 +41,7 @@ class BaseVideoDataset(Dataset, ABC):
         if not self.metadata_path.exists():
             # Build dataset
             print(f"Creating dataset in {self.save_dir}...")
-            self.download_dataset()
+            #self.download_dataset()
             json.dump(
                 {
                     "training": self.get_data_lengths("training"),
@@ -77,6 +77,7 @@ class BaseVideoDataset(Dataset, ABC):
         lengths = []
         for path in self.get_data_paths(split):
             length = cv2.VideoCapture(str(path)).get(cv2.CAP_PROP_FRAME_COUNT)
+            print(length)
             lengths.append(length)
         return lengths
 

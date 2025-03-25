@@ -11,10 +11,12 @@ import wandb
 from einops import rearrange
 from pytorch_lightning.loggers import WandbLogger
 from torchvision.io import write_video
-from lightning_utilities.core.rank_zero import rank_zero_only
+#from lightning_utilities.core.rank_zero import rank_zero_only
+from lightning.pytorch.utilities.rank_zero import rank_zero_only
 from omegaconf import OmegaConf
 
 from src.utils import pylogger
+
 
 log = pylogger.RankedLogger(__name__, rank_zero_only=True)
 
@@ -96,6 +98,7 @@ def plot_samples(preds, gts, title="samples", path="./", wandb_logger=None):
             print(f"ERROR logging {title}")
 
 
+#@rank_zero_only
 def log_video(
     observation_hats: List[torch.Tensor] | torch.Tensor,
     observation_gt: Optional[torch.Tensor] = None,
@@ -137,7 +140,7 @@ def log_video(
         context_frames = torch.arange(context_frames, device=observation_gt.device)
     for observation_hat in observation_hats:
         observation_hat[:, context_frames] = observation_gt[:, context_frames]
-
+    
     if raw_dir is not None:
         raw_dir = Path(raw_dir)
         raw_dir.mkdir(parents=True, exist_ok=True)
@@ -196,5 +199,6 @@ def log_video(
             {
                 name: wandb.Video(video[i], fps=fps, caption=caption),
                 "trainer/global_step": step,
-            }
+            },
+            
         )

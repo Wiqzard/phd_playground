@@ -3,7 +3,7 @@ from pathlib import Path
 import torch
 from tqdm import tqdm
 import argparse
-from algorithms.vae.common.distribution import DiagonalGaussianDistribution
+from src.models.components.autoencoder.vae.common.distribution import DiagonalGaussianDistribution
 
 
 def estimate_latent_stats(
