@@ -29,7 +29,9 @@ class EnergyModel(nn.Module):
             nn.Linear(256, 1),
         )
 
-    def forward(self, x: torch.Tensor, t: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, t: torch.Tensor, y: torch.Tensor
+    ) -> torch.Tensor:
         x = self.dit(x, t, y, return_latents=True)
         x = x.mean(dim=1)  # Global average pooling
         energy = self.energy_head(x).squeeze(-1)

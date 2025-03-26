@@ -95,6 +95,8 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim: int, pos: np.ndarray) -> np.nda
 
     emb = np.concatenate([emb_sin, emb_cos], axis=1)  # (M, D)
     return emb
+
+
 def rearrange_contiguous_many(
     tensors: Tuple[torch.Tensor, ...], *args, **kwargs
 ) -> Tuple[torch.Tensor, ...]:
@@ -308,7 +310,9 @@ class DiTBase(nn.Module):
 
         # 3) Factorize the sequence (if required)
         if self.is_factorized:
-            x, c = rearrange_contiguous_many((x, c), "b (t p) c -> (b t) p c", p=self.num_patches)
+            x, c = rearrange_contiguous_many(
+                (x, c), "b (t p) c -> (b t) p c", p=self.num_patches
+            )
             if self.is_pos_emb_absolute_factorized:
                 x = self.spatial_pos_emb(x)
 
@@ -321,22 +325,26 @@ class DiTBase(nn.Module):
 
             if self.is_factorized:
                 # Switch space <-> time
-                x, c = rearrange_contiguous_many((x, c), "(b t) p c -> (b p) t c", b=batch_size)
+                x, c = rearrange_contiguous_many(
+                    (x, c), "(b t) p c -> (b p) t c", b=batch_size
+                )
                 # Possibly apply temporal pos emb the first time
                 if i == 0 and self.pos_emb_type == "sinusoidal_factorized":
                     x = self.temporal_pos_emb(x)
                 # Temporal block
                 x = self.checkpoint(temporal_block, x, c)
                 # Switch back
-                x, c = rearrange_contiguous_many((x, c), "(b p) t c -> (b t) p c", b=batch_size)
+                x, c = rearrange_contiguous_many(
+                    (x, c), "(b p) t c -> (b t) p c", b=batch_size
+                )
 
         # 5) Un-factorize if needed
         if self.is_factorized:
-            x, c = rearrange_contiguous_many((x, c), "(b t) p c -> b (t p) c", b=batch_size)
+            x, c = rearrange_contiguous_many(
+                (x, c), "(b t) p c -> b (t p) c", b=batch_size
+            )
 
         # 6) Final layer
         x = self.final_layer(x, c)
 
         return x
-
-

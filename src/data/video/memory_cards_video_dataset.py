@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional, List 
+from typing import Any, Dict, Optional, List
 import io
 import tarfile
 import torch
@@ -14,7 +14,6 @@ from torch.utils.data import DataLoader
 from src.data.video.base_video import BaseAdvancedVideoDataset
 
 
-
 class MemoryAdvancedVideoDataset(BaseAdvancedVideoDataset):
     """
     Minecraft dataset that loads sub-clips, handles frame skip, latents, etc. (advanced).
@@ -28,7 +27,6 @@ class MemoryAdvancedVideoDataset(BaseAdvancedVideoDataset):
         latent_downsampling_factor: List[int],
         latent_suffix: str = "",
         split: str = "training",
-
         # Additional advanced-video args
         current_epoch: Optional[int] = None,
         latent_enable: bool = False,
@@ -83,7 +81,7 @@ class MemoryAdvancedVideoDataset(BaseAdvancedVideoDataset):
             interpolation=InterpolationMode.NEAREST_EXACT,
             antialias=True,
         )
-    
+
     def download_dataset(self):
         pass
 
@@ -95,10 +93,10 @@ class MemoryAdvancedVideoDataset(BaseAdvancedVideoDataset):
         and return shape [T, 4].
         """
         return None
-        #path = video_metadata["video_paths"].with_suffix(".npz")
-        #actions = np.load(path)["actions"][start_frame:end_frame]
+        # path = video_metadata["video_paths"].with_suffix(".npz")
+        # actions = np.load(path)["actions"][start_frame:end_frame]
         ## E.g. 4 possible actions => shape [T, 4]
-        #return torch.from_numpy(np.eye(4)[actions]).float()
+        # return torch.from_numpy(np.eye(4)[actions]).float()
 
 
 class MemoryDataModule(LightningDataModule):
@@ -136,7 +134,7 @@ class MemoryDataModule(LightningDataModule):
             resolution (int): Desired resolution of the frames.
             latent_downsampling_factor (List[int]): Downsampling factor for latent representation.
             latent_suffix (str): Optional suffix for latent files.
-            split (str): Which split to use (training, validation, or test). 
+            split (str): Which split to use (training, validation, or test).
                          Note that inside MemoryAdvancedVideoDataset, 'test' is auto-converted to 'validation'.
             current_epoch (int, optional): Current training epoch; can be used by the dataset for adaptive logic.
             latent_enable (bool): Whether to enable latents or not.
@@ -252,7 +250,9 @@ class MemoryDataModule(LightningDataModule):
 
     def train_dataloader(self) -> DataLoader:
         if self.dataset_train is None:
-            raise ValueError("Training dataset is not initialized. Call `.setup('fit')` first.")
+            raise ValueError(
+                "Training dataset is not initialized. Call `.setup('fit')` first."
+            )
         return DataLoader(
             self.dataset_train,
             batch_size=self.batch_size,
@@ -263,7 +263,9 @@ class MemoryDataModule(LightningDataModule):
 
     def val_dataloader(self) -> DataLoader:
         if self.dataset_val is None:
-            raise ValueError("Validation dataset is not initialized. Call `.setup('fit')` first.")
+            raise ValueError(
+                "Validation dataset is not initialized. Call `.setup('fit')` first."
+            )
         return DataLoader(
             self.dataset_val,
             batch_size=self.batch_size,
@@ -274,7 +276,9 @@ class MemoryDataModule(LightningDataModule):
 
     def test_dataloader(self) -> DataLoader:
         if self.dataset_test is None:
-            raise ValueError("Test dataset is not initialized. Call `.setup('test')` first.")
+            raise ValueError(
+                "Test dataset is not initialized. Call `.setup('test')` first."
+            )
         return DataLoader(
             self.dataset_test,
             batch_size=self.batch_size,
@@ -282,8 +286,3 @@ class MemoryDataModule(LightningDataModule):
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
         )
-
-        
-
-                 
-

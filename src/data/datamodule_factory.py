@@ -1,7 +1,7 @@
-
 from typing import Optional, Type, Dict, Any, Callable
 from lightning import LightningDataModule
 from torch.utils.data import DataLoader, Dataset
+
 
 class DataModuleFactory(LightningDataModule):
     """
@@ -14,10 +14,12 @@ class DataModuleFactory(LightningDataModule):
 
     def __init__(
         self,
-        dataset_cls: Callable[..., Dataset], 
+        dataset_cls: Callable[..., Dataset],
         batch_size: int = 32,
         num_workers: int = 16,
         pin_memory: bool = False,
+        shuffle: bool = True,
+        overwrite_split: Optional[str] = None,
         **kwargs
     ):
         """
@@ -32,10 +34,12 @@ class DataModuleFactory(LightningDataModule):
         """
         super().__init__()
         self.dataset_cls = dataset_cls
-        #self.dataset_kwargs = dataset_kwargs
+        # self.dataset_kwargs = dataset_kwargs
         self.batch_size = batch_size
         self.num_workers = num_workers
+        self.shuffle = shuffle
         self.pin_memory = pin_memory
+        self.overwrite_split = overwrite_split
 
         # Placeholders for the splits
         self.dataset_train = None
@@ -49,42 +53,63 @@ class DataModuleFactory(LightningDataModule):
         """
         if stage == "fit" or stage is None:
             # Instantiate the 'training' and 'validation' datasets
-            self.dataset_train = self.dataset_cls(split="training")#, **self.dataset_kwargs)
-            self.dataset_val = self.dataset_cls(split="validation")#, **self.dataset_kwargs)
+            self.dataset_train = self.dataset_cls(
+                split="training" if self.overwrite_split is None else self.overwrite_split
+            )  # , **self.dataset_kwargs)
+        
+        if stage == "fit" or stage == "validate":
+            self.dataset_val = self.dataset_cls(
+                split="validation"if self.overwrite_split is None else self.overwrite_split
+            )  # , **self.dataset_kwargs)
 
         if stage == "test":
             # Instantiate the 'test' dataset
-            self.dataset_test = self.dataset_cls(split="test") #, **self.dataset_kwargs)
+            self.dataset_test = self.dataset_cls(
+                split="test" if self.overwrite_split is None else self.overwrite_split
+            )  # , **self.dataset_kwargs)
 
     def train_dataloader(self) -> DataLoader:
         if self.dataset_train is None:
-            raise ValueError("Training dataset is not initialized. Call `.setup('fit')` first.")
+            raise ValueError(
+                "Training dataset is not initialized. Call `.setup('fit')` first."
+            )
         return DataLoader(
             self.dataset_train,
             batch_size=self.batch_size,
-            shuffle=True,
+            shuffle=self.shuffle,
             num_workers=self.num_workers,
-            pin_memory=self.pin_memory
+            pin_memory=self.pin_memory,
+            persistent_workers=True,
+            worker_init_fn=lambda worker_id: (
+                self.dataset_train.worker_init_fn(worker_id)
+                if hasattr(self.dataset_train, "worker_init_fn")
+                else None
+            ),
+
         )
 
     def val_dataloader(self) -> DataLoader:
         if self.dataset_val is None:
-            raise ValueError("Validation dataset is not initialized. Call `.setup('fit')` first.")
+            raise ValueError(
+                "Validation dataset is not initialized. Call `.setup('fit')` first."
+            )
         return DataLoader(
             self.dataset_val,
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
-            pin_memory=self.pin_memory
+            pin_memory=self.pin_memory,
         )
 
     def test_dataloader(self) -> DataLoader:
         if self.dataset_test is None:
-            raise ValueError("Test dataset is not initialized. Call `.setup('test')` first.")
+            raise ValueError(
+                "Test dataset is not initialized. Call `.setup('test')` first."
+            )
         return DataLoader(
             self.dataset_test,
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
-            pin_memory=self.pin_memory
+            pin_memory=self.pin_memory,
         )

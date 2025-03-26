@@ -16,8 +16,8 @@ from pytorch_lightning import LightningDataModule
 # Original imports and constants
 # -------------
 
-#from openai_vpt.agent import ACTION_TRANSFORMER_KWARGS, resize_image, AGENT_RESOLUTION
-#from openai_vpt.lib.actions import ActionTransformer
+# from openai_vpt.agent import ACTION_TRANSFORMER_KWARGS, resize_image, AGENT_RESOLUTION
+# from openai_vpt.lib.actions import ActionTransformer
 
 # Original constants
 MINEREC_ORIGINAL_HEIGHT_PX = 720
@@ -25,7 +25,9 @@ CAMERA_SCALER = 360.0 / 2400.0
 QUEUE_TIMEOUT = 10
 
 # Hard-code path or place "cursors/mouse_cursor_white_16x16.png" somewhere
-CURSOR_FILE = os.path.join(os.path.dirname(__file__), "cursors", "mouse_cursor_white_16x16.png")
+CURSOR_FILE = os.path.join(
+    os.path.dirname(__file__), "cursors", "mouse_cursor_white_16x16.png"
+)
 
 # For adjusting camera scaling if GUI is open; simplified (using default “1.0” if not present)
 MINEREC_VERSION_SPECIFIC_SCALERS = {
@@ -97,9 +99,8 @@ def composite_images_with_alpha(image1, image2, alpha, x, y):
     if ch == 0 or cw == 0:
         return
     alpha = alpha[:ch, :cw]
-    image1[y:y + ch, x:x + cw, :] = (
-        image1[y:y + ch, x:x + cw, :] * (1 - alpha)
-        + image2[:ch, :cw, :] * alpha
+    image1[y : y + ch, x : x + cw, :] = (
+        image1[y : y + ch, x : x + cw, :] * (1 - alpha) + image2[:ch, :cw, :] * alpha
     ).astype(np.uint8)
 
 
@@ -160,6 +161,7 @@ class MineRLVideoDataset(Dataset):
     NOTE: This approach re-opens the video in __getitem__ each time, which is simpler code
           but can be slow for large scale. Consider more efficient caching or pre-computed .npz for real usage.
     """
+
     def __init__(self, dataset_dir, transform_actions_to_agent=False):
         super().__init__()
         self.dataset_dir = dataset_dir
@@ -194,7 +196,7 @@ class MineRLVideoDataset(Dataset):
 
         # 2) Parse the .jsonl and build up a list of valid steps
         self.samples = []
-        for (video_path, json_path) in demonstration_tuples:
+        for video_path, json_path in demonstration_tuples:
             with open(json_path, "r") as f:
                 json_lines = f.readlines()
             # Convert lines to JSON
@@ -238,17 +240,21 @@ class MineRLVideoDataset(Dataset):
                     continue
 
                 # We have a valid sample => store
-                self.samples.append({
-                    "video_path": video_path,
-                    "frame_idx": frame_counter,
-                    "env_action": env_action,
-                    "isGuiOpen": step_data["isGuiOpen"],
-                    "mouse_x": step_data["mouse"]["x"],
-                    "mouse_y": step_data["mouse"]["y"],
-                })
+                self.samples.append(
+                    {
+                        "video_path": video_path,
+                        "frame_idx": frame_counter,
+                        "env_action": env_action,
+                        "isGuiOpen": step_data["isGuiOpen"],
+                        "mouse_x": step_data["mouse"]["x"],
+                        "mouse_y": step_data["mouse"]["y"],
+                    }
+                )
                 frame_counter += 1
 
-        print(f"Found total of {len(self.samples)} valid (non-null) frames across {len(demonstration_tuples)} demos.")
+        print(
+            f"Found total of {len(self.samples)} valid (non-null) frames across {len(demonstration_tuples)} demos."
+        )
 
     def __len__(self):
         return len(self.samples)
@@ -281,12 +287,16 @@ class MineRLVideoDataset(Dataset):
 
         # 4) If isGuiOpen, composite the mouse cursor
         if isGuiOpen:
-            # The frame might be 720p, but sometimes the version is different. 
+            # The frame might be 720p, but sometimes the version is different.
             # We'll ignore version-specific scalers for brevity and just do a ratio:
-            camera_scaling_factor = frame_bgr.shape[0] / float(MINEREC_ORIGINAL_HEIGHT_PX)
+            camera_scaling_factor = frame_bgr.shape[0] / float(
+                MINEREC_ORIGINAL_HEIGHT_PX
+            )
             cursor_x = int(mouse_x * camera_scaling_factor)
             cursor_y = int(mouse_y * camera_scaling_factor)
-            composite_images_with_alpha(frame_bgr, self.cursor_image_bgr, self.cursor_alpha, cursor_x, cursor_y)
+            composite_images_with_alpha(
+                frame_bgr, self.cursor_image_bgr, self.cursor_alpha, cursor_x, cursor_y
+            )
 
         # Convert BGR -> RGB
         frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
@@ -297,7 +307,9 @@ class MineRLVideoDataset(Dataset):
         # 5) Convert to torch (C,H,W) if desired
         #    Note: VPT code uses (H, W, C); here we transform to typical PyTorch (C, H, W).
         frame_rgb = np.transpose(frame_rgb, (2, 0, 1))  # (C,H,W)
-        frame_tensor = torch.from_numpy(frame_rgb).float()  # [0..255] => up to you to normalize
+        frame_tensor = torch.from_numpy(
+            frame_rgb
+        ).float()  # [0..255] => up to you to normalize
 
         # Convert the action to a torch tensor as well, for your pipeline
         if isinstance(agent_action, dict):
@@ -325,6 +337,7 @@ class MineRLDataModule(LightningDataModule):
     Assumes you want only a single dataset for demonstration.
     You could add train/val/test splits as needed.
     """
+
     def __init__(
         self,
         dataset_dir: str,
@@ -342,7 +355,7 @@ class MineRLDataModule(LightningDataModule):
         # For simplicity, assume the entire dataset is "train"
         self.dataset = MineRLVideoDataset(
             dataset_dir=self.dataset_dir,
-            transform_actions_to_agent=self.transform_actions_to_agent
+            transform_actions_to_agent=self.transform_actions_to_agent,
         )
 
     def train_dataloader(self):
@@ -358,6 +371,7 @@ class MineRLDataModule(LightningDataModule):
     #     ...
     # def test_dataloader(self):
     #     ...
+
 
 # -------------
 # Usage Example
@@ -375,8 +389,8 @@ if __name__ == "__main__":
     # Example: retrieve one batch from the train_dataloader
     loader = data_module.train_dataloader()
     for frames, actions in loader:
-        print("frames.shape:", frames.shape)   # (B, C, H, W)
-        print("actions:", actions)            # dict of Tensors or single Tensor
+        print("frames.shape:", frames.shape)  # (B, C, H, W)
+        print("actions:", actions)  # dict of Tensors or single Tensor
         break
 
     # Then plug data_module into your Lightning Trainer:

@@ -46,7 +46,9 @@ def sigmoid_beta_schedule(timesteps, start=-3, end=3, tau=1, clamp_min=1e-5):
     t = torch.linspace(0, timesteps, steps, dtype=torch.float64) / timesteps
     v_start = torch.tensor(start / tau).sigmoid()
     v_end = torch.tensor(end / tau).sigmoid()
-    alphas_cumprod = (-((t * (end - start) + start) / tau).sigmoid() + v_end) / (v_end - v_start)
+    alphas_cumprod = (-((t * (end - start) + start) / tau).sigmoid() + v_end) / (
+        v_end - v_start
+    )
     alphas_cumprod = alphas_cumprod / alphas_cumprod[0]
     betas = 1 - (alphas_cumprod[1:] / alphas_cumprod[:-1])
     return torch.clip(betas, 0, 0.999)
@@ -83,7 +85,9 @@ class DDPMLitModule(LightningModule):
             nice_name: A short name for logging or printing.
         """
         super().__init__()
-        self.save_hyperparameters(ignore=["model", "optimizer", "scheduler"], logger=False)
+        self.save_hyperparameters(
+            ignore=["model", "optimizer", "scheduler"], logger=False
+        )
         self.model = model
         self.optimizer = optimizer
         self.scheduler = scheduler
@@ -98,7 +102,9 @@ class DDPMLitModule(LightningModule):
         self.betas = self.get_beta_schedule(beta_schedule, num_timesteps)
         alphas = 1.0 - self.betas
         alphas_cumprod = torch.cumprod(alphas, dim=0)
-        alphas_cumprod_prev = torch.cat([torch.tensor([1.0]), alphas_cumprod[:-1]], dim=0)
+        alphas_cumprod_prev = torch.cat(
+            [torch.tensor([1.0]), alphas_cumprod[:-1]], dim=0
+        )
 
         # Store them as buffers for sampling on GPU
         self.register_buffer("betas_t", self.betas)
@@ -125,10 +131,10 @@ class DDPMLitModule(LightningModule):
         # X_0 noise, X_1 data
 
         self.schedules = [
-            "linear", # beta_t = beta_start + (beta_end - beta_start) * t / T
-            "cosine", # beta_t = 1 - (cos(pi * t / T) + 1) / 2
-            "sigmoid", # beta_t = 1 - (sigmoid((t - T/2) / tau) - sigmoid(-T/2) / (sigmoid(T/2) - sigmoid(-T/2))
-            "linear-interpolation" # X_0 = (1 - alpha_t) * X_1 + alpha_t * X_0
+            "linear",  # beta_t = beta_start + (beta_end - beta_start) * t / T
+            "cosine",  # beta_t = 1 - (cos(pi * t / T) + 1) / 2
+            "sigmoid",  # beta_t = 1 - (sigmoid((t - T/2) / tau) - sigmoid(-T/2) / (sigmoid(T/2) - sigmoid(-T/2))
+            "linear-interpolation",  # X_0 = (1 - alpha_t) * X_1 + alpha_t * X_0
         ]
 
         # Loss function (L2 MSE is typical for DDPM)
@@ -145,16 +151,16 @@ class DDPMLitModule(LightningModule):
             return cosine_beta_schedule(T)
         elif schedule_type == "sigmoid":
             return sigmoid_beta_schedule(T)
-    
+
     def q_sample_sbm(
         x0: torch.Tensor,
         t: torch.Tensor,
         noise: torch.Tensor = None,
         beta_min: float = 0.1,
         beta_max: float = 20.0,
-        schedule: str = 'linear',
+        schedule: str = "linear",
         s: float = 0.008,
-        variance_mode: str = "VP"
+        variance_mode: str = "VP",
     ) -> torch.Tensor:
         """
         Sample from the SBM (Stochastic Backward Model), i.e., produce x_t given x_0.
@@ -176,10 +182,10 @@ class DDPMLitModule(LightningModule):
         # If user doesn't provide noise, sample standard Gaussian
         if noise is None:
             noise = torch.randn_like(x0)
-        
-        if schedule == 'linear':
 
-            B_t = beta_min * t + 0.5 * (beta_max - beta_min) * (t ** 2)
+        if schedule == "linear":
+
+            B_t = beta_min * t + 0.5 * (beta_max - beta_min) * (t**2)
             alpha_t = torch.exp(-0.5 * B_t)  # = e^{-1/2 * B(t)}
             if variance_mode == "VP":
                 # ----------------------------------------------------
@@ -197,13 +203,13 @@ class DDPMLitModule(LightningModule):
                 sigma_t = torch.sqrt(1.0 - torch.exp(-B_t))  # = sqrt(1 - e^{-B(t)})
 
             elif variance_mode == "sub-VP":
-                sigma_t = torch.sqrt(1.0 - alpha_t ** 2)
+                sigma_t = torch.sqrt(1.0 - alpha_t**2)
 
             elif variance_mode == "VE":
                 alpha_t = 1
-                sigma_t = beta_min * (beta_max/beta_min) ** t
+                sigma_t = beta_min * (beta_max / beta_min) ** t
 
-        elif schedule == 'cosine':
+        elif schedule == "cosine":
             # ----------------------------------------------------
             # Cosine schedule (from "Improved Denoising Diffusion Probabilistic Models")
             #
@@ -216,13 +222,14 @@ class DDPMLitModule(LightningModule):
 
             alpha_t = torch.sqrt(alpha_bar_t)
             sigma_t = torch.sqrt(1.0 - alpha_bar_t)
-        
+
         else:
-            raise ValueError(f"Unknown schedule '{schedule}'. Must be 'linear' or 'cosine'.")
+            raise ValueError(
+                f"Unknown schedule '{schedule}'. Must be 'linear' or 'cosine'."
+            )
 
         # Combine x0 with noise to get x_t
         return alpha_t * x0 + sigma_t * noise
-
 
     def q_sample(self, x0, t, noise=None):
         """
@@ -231,7 +238,9 @@ class DDPMLitModule(LightningModule):
         """
         if noise is None:
             noise = torch.randn_like(x0)
-        sqrt_alphas_cumprod_t = torch.sqrt(self.alphas_cumprod_t[t])[:, None, None, None]
+        sqrt_alphas_cumprod_t = torch.sqrt(self.alphas_cumprod_t[t])[
+            :, None, None, None
+        ]
         sqrt_one_minus_alphas_cumprod_t = torch.sqrt(1.0 - self.alphas_cumprod_t[t])[
             :, None, None, None
         ]
@@ -262,7 +271,9 @@ class DDPMLitModule(LightningModule):
         """
         x0 = batch[0] if isinstance(batch, (tuple, list)) else batch
         # Sample t uniformly
-        t = torch.randint(0, self.num_timesteps, (x0.shape[0],), device=x0.device).long()
+        t = torch.randint(
+            0, self.num_timesteps, (x0.shape[0],), device=x0.device
+        ).long()
         loss = self.p_loss(x0, t)
 
         self.log("train/loss", loss, prog_bar=True, on_step=True, on_epoch=False)
@@ -275,7 +286,9 @@ class DDPMLitModule(LightningModule):
         Compute the same diffusion loss on validation data.
         """
         x0 = batch[0] if isinstance(batch, (tuple, list)) else batch
-        t = torch.randint(0, self.num_timesteps, (x0.shape[0],), device=x0.device).long()
+        t = torch.randint(
+            0, self.num_timesteps, (x0.shape[0],), device=x0.device
+        ).long()
         loss = self.p_loss(x0, t)
         self.log("val/loss", loss, prog_bar=True, on_epoch=True, sync_dist=True)
         return loss
@@ -303,10 +316,12 @@ class DDPMLitModule(LightningModule):
         for i in reversed(range(self.num_timesteps)):
             t = torch.tensor([i], device=device, dtype=torch.long)
             betas_t = self.betas_t[t][:, None, None, None]
-            sqrt_one_minus_alphas_cumprod_t = torch.sqrt(1.0 - self.alphas_cumprod_t[t])[
+            sqrt_one_minus_alphas_cumprod_t = torch.sqrt(
+                1.0 - self.alphas_cumprod_t[t]
+            )[:, None, None, None]
+            sqrt_recip_alphas_t = torch.sqrt(1.0 / self.alphas_t[t])[
                 :, None, None, None
             ]
-            sqrt_recip_alphas_t = torch.sqrt(1.0 / self.alphas_t[t])[:, None, None, None]
 
             # Predict noise
             noise_pred = self.model(img, t.expand(batch_size))

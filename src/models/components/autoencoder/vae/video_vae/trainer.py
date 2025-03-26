@@ -27,7 +27,7 @@ class VideoVAETrainer(BaseLightningTrainer):
         video_lengths: List[int],
         validation_video_lengths: List[int],
     ):
-        
+
         self.lr = lr
         self.disc_start = disc_start
         self.warmup_steps = warmup_steps
@@ -38,7 +38,6 @@ class VideoVAETrainer(BaseLightningTrainer):
         self.validation_video_lengths = validation_video_lengths
         self.num_logged_videos = [0] * len(self.validation_video_lengths)
         super().__init__()
-
 
     def _build_model(self):
         with open_dict(self.cfg):

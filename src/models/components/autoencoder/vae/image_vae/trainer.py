@@ -312,12 +312,31 @@ class ImageVAE(VAE):
         checkpoint = torch.load(path, map_location="cpu")
         # FIXME: temporary fix for vaes trained with older versions of the code (for minecraft VAE)
         if "cfg" not in checkpoint:
-            checkpoint["cfg"] = OmegaConf.load(
-                "configurations/algorithm/image_vae.yaml"
+            #checkpoint["cfg"] = OmegaConf.load(
+            #    "configurations/algorithm/image_vae.yaml"
+            #)
+            #checkpoint["cfg"].ddconfig.resolution = 256
+
+            cfg = OmegaConf.create(
+            {"ddconfig": {
+            "double_z": True,
+            "z_channels": 4,
+            "resolution": 256,
+            "in_channels": 3,
+            "out_ch": 3,
+            "ch": 128,
+            "ch_mult": [1, 2, 4, 4],
+            "num_res_blocks": 2,
+            "attn_resolutions": [],
+            "dropout": 0.0,
+            },
+            "embed_dim": 4,
+            }
             )
-            checkpoint["cfg"].ddconfig.resolution = 256
-        cfg = checkpoint["cfg"]
+
+        #cfg = checkpoint["cfg"]
         model = cls(cfg)
+        #model = cls(**cfg)
         # filter out checkpoint state_dict
         state_dict = checkpoint["state_dict"]
         for k in list(state_dict.keys()):

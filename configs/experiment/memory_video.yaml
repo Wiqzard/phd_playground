@@ -1,11 +1,11 @@
 # @package _global_
 
 defaults:
-  - override /data: memory_test
+  - override /data: minecraft_marsh #memory_test
   - override /model: ddpm_video
   - override /callbacks: default
-  #- override /trainer: gpu
-  - override /trainer:  ddp 
+  - override /trainer: gpu
+  #- override /trainer:  ddp 
   - override /logger: wandb
   - override /paths: default
   #- override /debug: overfit
@@ -52,7 +52,7 @@ data:
 model:
   ckpt_path: #logs/train/runs/2025-03-16_19-48-49/checkpoints/last.ckpt #null #logs/train/runs/2025-02-21_22-04-15/checkpoints/last.ckpt  # null
   lora_finetune: False 
-  compile_model:  False #true_without_ddp_optimizer # True
+  compile_model:  true_without_ddp_optimizer # True
   batch_size: ${data.batch_size}
 
   data_mean: ${data.dataset_cls.data_mean} 
@@ -104,6 +104,7 @@ model:
   scheduling_matrix: full_sequence
   context_dropout: 0.0
   reconstruction_guidance: 0.0
+  cfg_scale: 1.0 # no cfg scaling 
 
 
 
@@ -111,20 +112,21 @@ model:
   clip_noise: 20.0
 
   # put these into data maybe?
-  external_cond_processing: null 
-  external_cond_dim: 0
+  external_cond_processing: mask_first #null 
+  external_cond_dim: ${data.dataset_cls.external_cond_dim}
+  external_cond_stack: True
+  frame_skip: ${data.dataset_cls.frame_skip}
   
   # Tasks
   tasks: [prediction,] #, interpolation]
   diffusion_model:
     _partial_: true
-    _target_: src.models.components.diffusion.DiscreteDiffusion #ContinuousDiffusion 
+    _target_: src.models.components.diffusion.DiscreteDiffusion #ContinuousDiffusion  # DiscreteDiffusion
     model: 
       _target_: insert_memory.MemoryDiT3D 
       x_shape: ${data.dataset_cls.observation_shape}
       cat_conditioning: ${model.cat_context_in_c_dim}
       max_tokens: ${model.attention_window_size} #${data.max_frames}
-      external_cond_dim: 0
       hidden_size: 192
       patch_size: 4
       variant: full
@@ -142,25 +144,22 @@ model:
       memory_layer_indices: [1, 5, 9]
       momentum: False #True
     #x_shape: ${data.observation_shape}
-    #external_cond_dim: ${model.external_cond_dim}
+      external_cond_dim: 8 #${model.external_cond_dim}
 
     timesteps: 1000
-    beta_schedule: cosine
-    schedule_fn_kwargs:
-      shift: 1.0
     use_causal_mask: ${model.use_causal_mask}
     clip_noise: ${model.clip_noise}
-    # training
     objective: pred_v
+    beta_schedule: cosine_simple_diffusion
     loss_weighting:
-      strategy: fused_min_snr
-      snr_clip: 5.0
-      cum_snr_decay: 0.9
-    # sampling
+      strategy: sigmoid #fused_min_snr #sigmoid
+      sigmoid_bias: -1
+    training_schedule: cosine 
+    training_schedule_shift: 0.125
+    schedule_fn_kwargs:
+      shifted: 0.125
     sampling_timesteps: ${model.sampling_timesteps}
-    ddim_sampling_eta: 0.0
-    # (For full sequence diffusion)
-    reconstruction_guidance: 0.0
+
 
     #_target_: insert_memory.DiT3D #TTT #src.models.components.dit.DiT # _S_4
     #in_channels: 6 #8
@@ -179,7 +178,8 @@ model:
   optimizer:
     _target_: torch.optim.AdamW
     _partial_: true
-    lr: 0.0002 #2 #0.0001
+    lr: 0.0001 #2 #0.0001
+    weight_decay: 0.001
 
   lr_scheduler:
     _target_: torch.optim.lr_scheduler.LinearLR
@@ -189,6 +189,11 @@ model:
     total_iters: ${trainer.max_epochs}
 
 callbacks:
+  ema:
+    enabled: true
+    decay: 0.9999
+    validate_original_weights: True
+    
   early_stopping:
     #monitor: "val/loss"
     monitor: "prediction/VideoMetricType.MSE"

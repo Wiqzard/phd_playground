@@ -6,6 +6,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from lightning import LightningDataModule
 
+
 class MemoryMazeDataset(Dataset):
     def __init__(self, base_folder, num_frames, transform=None):
         """
@@ -17,7 +18,7 @@ class MemoryMazeDataset(Dataset):
         self.base_folder = base_folder
         self.num_frames = num_frames
         self.transform = transform
-        self.num_actions = 6 # 
+        self.num_actions = 6  #
 
         # Find all NPZ files in the base folder.
         self.files = sorted(glob.glob(os.path.join(base_folder, "*.npz")))
@@ -56,24 +57,30 @@ class MemoryMazeDataset(Dataset):
                 sampled_episode[key] = value
 
         # Optionally apply a transform.
-        #if self.transform:
+        # if self.transform:
 
         # Convert numpy arrays to torch tensors.
         for key, value in sampled_episode.items():
             if isinstance(value, np.ndarray):
                 sampled_episode[key] = torch.from_numpy(value)
 
-
-        sampled_episode["video"]  = ((sampled_episode["image"]) / 255 * 2 - 1 ).permute(3, 0, 1, 2).to(torch.float32)
+        sampled_episode["video"] = (
+            ((sampled_episode["image"]) / 255 * 2 - 1)
+            .permute(3, 0, 1, 2)
+            .to(torch.float32)
+        )
         sampled_episode["first_frame"] = sampled_episode["video"][:, 0, ...]
         del sampled_episode["image"]
 
         # do not take the last action
-        sampled_episode["action"] = sampled_episode["action"][:-1,:].to(torch.long)
+        sampled_episode["action"] = sampled_episode["action"][:-1, :].to(torch.long)
         return sampled_episode
 
+
 class MemoryMazeDataModule(LightningDataModule):
-    def __init__(self, base_folder, num_frames, transform=None, batch_size=32, num_workers=16):
+    def __init__(
+        self, base_folder, num_frames, transform=None, batch_size=32, num_workers=16
+    ):
         super().__init__()
         self.save_hyperparameters(logger=False, ignore=("transform",))
 
@@ -86,18 +93,39 @@ class MemoryMazeDataModule(LightningDataModule):
     def setup(self, stage=None):
         if stage in (None, "fit"):
             train_folder = os.path.join(self.hparams.base_folder, "train")
-            self.train_dataset = MemoryMazeDataset(train_folder , self.hparams.num_frames, self.transform)
+            self.train_dataset = MemoryMazeDataset(
+                train_folder, self.hparams.num_frames, self.transform
+            )
             val_folder = os.path.join(self.hparams.base_folder, "eval")
-            self.val_dataset = MemoryMazeDataset(val_folder, self.hparams.num_frames, self.transform)
+            self.val_dataset = MemoryMazeDataset(
+                val_folder, self.hparams.num_frames, self.transform
+            )
         if stage == "test":
             test_folder = os.path.join(self.hparams.base_folder, "test")
-            self.test_dataset = MemoryMazeDataset(test_folder, self.num_frames, self.transform)
+            self.test_dataset = MemoryMazeDataset(
+                test_folder, self.num_frames, self.transform
+            )
 
     def train_dataloader(self):
-        return DataLoader(self.train_dataset, batch_size=self.hparams.batch_size, shuffle=True, num_workers=self.hparams.num_workers)
+        return DataLoader(
+            self.train_dataset,
+            batch_size=self.hparams.batch_size,
+            shuffle=True,
+            num_workers=self.hparams.num_workers,
+        )
 
     def val_dataloader(self):
-        return DataLoader(self.val_dataset, batch_size=self.hparams.batch_size, shuffle=True, num_workers=self.hparams.num_workers)
+        return DataLoader(
+            self.val_dataset,
+            batch_size=self.hparams.batch_size,
+            shuffle=True,
+            num_workers=self.hparams.num_workers,
+        )
 
     def test_dataloader(self):
-        return DataLoader(self.test_dataset, batch_size=self.hparams.batch_size, shuffle=False, num_workers=self.hparams.num_workers)
+        return DataLoader(
+            self.test_dataset,
+            batch_size=self.hparams.batch_size,
+            shuffle=False,
+            num_workers=self.hparams.num_workers,
+        )

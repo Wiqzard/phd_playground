@@ -41,6 +41,7 @@ log = RankedLogger(__name__, rank_zero_only=True)
 
 # torch.set_float32_matmul_precision("")
 
+
 @task_wrapper
 def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Trains the model. Can additionally evaluate on a testset, using best weights obtained during

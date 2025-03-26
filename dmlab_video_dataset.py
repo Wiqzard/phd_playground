@@ -6,7 +6,8 @@ import numpy as np
 from omegaconf import DictConfig
 from tqdm import tqdm
 from internetarchive import download
-#from src.data.video.base_video_dataset import BaseVideoDataset
+
+# from src.data.video.base_video_dataset import BaseVideoDataset
 from src.data.video.base_video import BaseVideoDataset, BaseSimpleVideoDataset
 
 
@@ -35,31 +36,31 @@ class DmlabVideoDataset(BaseSimpleVideoDataset):
             frame_skip=1,
             validation_multiplier=validation_multiplier,
             split=split,
-            latent_downsampling_factor=latent_downsampling_factor
+            latent_downsampling_factor=latent_downsampling_factor,
         )
 
     def download_dataset(self) -> Sequence[int]:
         pass
-        #part_suffixes = ["aa", "ab", "ac"]
-        #for part_suffix in part_suffixes:
+        # part_suffixes = ["aa", "ab", "ac"]
+        # for part_suffix in part_suffixes:
         #    identifier = f"dmlab_dataset_{part_suffix}"
         #    file_name = f"dmlab.tar.part{part_suffix}"
         #    download(identifier, file_name, destdir=self.save_dir, verbose=True)
 
-        #combined_bytes = io.BytesIO()
-        #for part_suffix in part_suffixes:
+        # combined_bytes = io.BytesIO()
+        # for part_suffix in part_suffixes:
         #    identifier = f"dmlab_dataset_{part_suffix}"
         #    file_name = f"dmlab.tar.part{part_suffix}"
         #    part_file = self.save_dir / identifier / file_name
         #    with open(part_file, "rb") as part:
         #        combined_bytes.write(part.read())
-        #combined_bytes.seek(0)
-        #with tarfile.open(fileobj=combined_bytes, mode="r") as combined_archive:
+        # combined_bytes.seek(0)
+        # with tarfile.open(fileobj=combined_bytes, mode="r") as combined_archive:
         #    combined_archive.extractall(self.save_dir)
-        #(self.save_dir / "dmlab/test").rename(self.save_dir / "validation")
-        #(self.save_dir / "dmlab/train").rename(self.save_dir / "training")
-        #(self.save_dir / "dmlab").rmdir()
-        #for part_suffix in part_suffixes:
+        # (self.save_dir / "dmlab/test").rename(self.save_dir / "validation")
+        # (self.save_dir / "dmlab/train").rename(self.save_dir / "training")
+        # (self.save_dir / "dmlab").rmdir()
+        # for part_suffix in part_suffixes:
         #    identifier = f"dmlab_dataset_{part_suffix}"
         #    file_name = f"dmlab.tar.part{part_suffix}"
         #    part_file = self.save_dir / identifier / file_name
@@ -111,9 +112,16 @@ if __name__ == "__main__":
     validation_multiplier = 1
 
     dataset = DmlabVideoDataset(
-        resolution, external_cond_dim, n_frames, save_dir, validation_multiplier, "training"
+        resolution,
+        external_cond_dim,
+        n_frames,
+        save_dir,
+        validation_multiplier,
+        "training",
     )
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=4, shuffle=True, num_workers=16)
+    dataloader = torch.utils.data.DataLoader(
+        dataset, batch_size=4, shuffle=True, num_workers=16
+    )
 
     for batch in tqdm.tqdm(dataloader):
         pass

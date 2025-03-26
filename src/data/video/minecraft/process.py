@@ -6,13 +6,14 @@ from tqdm import tqdm
 import multiprocessing
 from functools import partial
 
+
 def process_single_video(
     video_info: dict,
     image_ext: str,
     overwrite: bool,
 ):
     """
-    Process a single video: 
+    Process a single video:
       - read frames from .mp4
       - skip frames to adjust FPS
       - resize if desired
@@ -40,7 +41,7 @@ def process_single_video(
     desired_fps = video_info["desired_fps"]
     desired_size = video_info["desired_size"]
 
-    base_name = video_file.replace(video_ext, "")  
+    base_name = video_file.replace(video_ext, "")
     video_path = os.path.join(env_path, video_file)
     jsonl_path = os.path.join(env_path, base_name + ".jsonl")
 
@@ -82,7 +83,7 @@ def process_single_video(
     read_frame_idx = 0
     extracted_actions = []
 
-    # We won't use tqdm here in parallel for each frame because parallel printing 
+    # We won't use tqdm here in parallel for each frame because parallel printing
     # can get messy. Instead, you could do a single "progress bar" at the master level.
     while True:
         ret, frame = cap.read()
@@ -140,10 +141,7 @@ def preprocess_videos_parallel(
 
     # Collect all videos
     video_info_list = []
-    envs = [
-        d for d in os.listdir(data_dir) 
-        if os.path.isdir(os.path.join(data_dir, d))
-    ]
+    envs = [d for d in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, d))]
     for env_dir in envs:
         env_path = os.path.join(data_dir, env_dir)
         out_env_path = os.path.join(out_dir, env_dir)
@@ -153,15 +151,17 @@ def preprocess_videos_parallel(
         video_files = [f for f in files_in_env if f.endswith(video_ext)]
 
         for vf in video_files:
-            video_info_list.append({
-                "env_dir": env_dir,
-                "env_path": env_path,
-                "video_file": vf,
-                "out_env_path": out_env_path,
-                "video_ext": video_ext,
-                "desired_fps": desired_fps,
-                "desired_size": desired_size,
-            })
+            video_info_list.append(
+                {
+                    "env_dir": env_dir,
+                    "env_path": env_path,
+                    "video_file": vf,
+                    "out_env_path": out_env_path,
+                    "video_ext": video_ext,
+                    "desired_fps": desired_fps,
+                    "desired_size": desired_size,
+                }
+            )
 
     print(f"Found {len(video_info_list)} videos total.")
     if not video_info_list:
@@ -169,34 +169,70 @@ def preprocess_videos_parallel(
 
     # Partial function so we only pass (video_info) to pool.map
     worker_func = partial(
-        process_single_video,
-        image_ext=image_ext,
-        overwrite=overwrite
+        process_single_video, image_ext=image_ext, overwrite=overwrite
     )
 
     # Create a pool of workers, map over video_info_list in parallel
     with multiprocessing.Pool(processes=num_workers) as pool:
         # optional: tqdm for the pool
-        list(tqdm(
-            pool.imap_unordered(worker_func, video_info_list),
-            total=len(video_info_list),
-            desc="Processing videos",
-        ))
+        list(
+            tqdm(
+                pool.imap_unordered(worker_func, video_info_list),
+                total=len(video_info_list),
+                desc="Processing videos",
+            )
+        )
 
     print("All videos processed in parallel!")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_dir", type=str, default="data/", help="Input data directory")
-    parser.add_argument("--out_dir", type=str, default="processed/", help="Output directory for frames/actions")
-    parser.add_argument("--video_ext", type=str, default=".mp4", help="Extension of the input video files")
-    parser.add_argument("--image_ext", type=str, default=".jpg", help="Extension of the output frame files")
-    parser.add_argument("--desired_fps", type=float, default=0.0, help="Desired FPS (0 to disable downsampling)")
-    parser.add_argument("--desired_width", type=int, default=0, help="Desired image width (0 to keep original)")
-    parser.add_argument("--desired_height", type=int, default=0, help="Desired image height (0 to keep original)")
-    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing output")
-    parser.add_argument("--num_workers", type=int, default=4, help="Number of parallel processes")
+    parser.add_argument(
+        "--data_dir", type=str, default="data/", help="Input data directory"
+    )
+    parser.add_argument(
+        "--out_dir",
+        type=str,
+        default="processed/",
+        help="Output directory for frames/actions",
+    )
+    parser.add_argument(
+        "--video_ext",
+        type=str,
+        default=".mp4",
+        help="Extension of the input video files",
+    )
+    parser.add_argument(
+        "--image_ext",
+        type=str,
+        default=".jpg",
+        help="Extension of the output frame files",
+    )
+    parser.add_argument(
+        "--desired_fps",
+        type=float,
+        default=0.0,
+        help="Desired FPS (0 to disable downsampling)",
+    )
+    parser.add_argument(
+        "--desired_width",
+        type=int,
+        default=0,
+        help="Desired image width (0 to keep original)",
+    )
+    parser.add_argument(
+        "--desired_height",
+        type=int,
+        default=0,
+        help="Desired image height (0 to keep original)",
+    )
+    parser.add_argument(
+        "--overwrite", action="store_true", help="Overwrite existing output"
+    )
+    parser.add_argument(
+        "--num_workers", type=int, default=4, help="Number of parallel processes"
+    )
 
     args = parser.parse_args()
 
@@ -205,7 +241,7 @@ if __name__ == "__main__":
         desired_size = (args.desired_width, args.desired_height)
     else:
         desired_size = None
-    
+
     # If desired_fps <= 0, treat it as None => no downsampling
     if args.desired_fps <= 0:
         desired_fps = None

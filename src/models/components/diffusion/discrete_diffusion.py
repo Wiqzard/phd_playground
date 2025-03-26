@@ -6,14 +6,6 @@ from torch import nn
 from torch.nn import functional as F
 from einops import rearrange, reduce
 
-#from ..backbones import (
-#    Unet3D,
-#    DiT3D,
-#    DiT3DPose,
-#    UViT3D,
-#    UViT3DPose,
-#)
-
 from src.models.components.diffusion.noise_schedule import make_beta_schedule
 
 
@@ -153,8 +145,45 @@ class DiscreteDiffusion(nn.Module):
     def add_shape_channels(self, x):
         return rearrange(x, f"... -> ...{' 1' * len(self.x_shape)}")
 
-    def model_predictions(self, x, k, external_cond=None, external_cond_mask=None, **kwargs):
-        model_output, *other_output = self.model(x, k, external_cond, external_cond_mask, **kwargs)
+    def model_predictions(
+        self,
+        x,
+        k,
+        external_cond=None,
+        external_cond_mask=None,
+        uncond_cond=None,
+        uncond_cond_mask=None,
+        cfg_scale=1.0,
+        **kwargs
+    ):
+        """
+        x:             The current noisy sample (batch, channels, height, width).
+        k:             The diffusion timestep (or index).
+        external_cond: The conditional embedding for your model (e.g. text embedding).
+        external_cond_mask: Any mask needed for external_cond (optional).
+        uncond_cond:   The 'null' or unconditional embedding.
+        uncond_cond_mask: Any mask needed for uncond_cond (optional).
+        cfg_scale:     The guidance scale. cfg_scale=1 means no guidance
+                    (only a single forward pass), and >1 amplifies
+                    the difference between conditional and unconditional outputs.
+        """
+
+        # If no CFG requested (scale=1 or no uncond input), just do a single pass
+        if cfg_scale == 1.0 or uncond_cond is None:
+            model_output, *other_output = self.model(
+                x, k, external_cond, external_cond_mask, **kwargs
+            )
+        else:
+            model_output_cond, *other_output_cond = self.model(
+                x, k, external_cond, external_cond_mask, **kwargs
+            )
+
+            kwargs.pop("neural_memory_cache", None)
+            model_output_uncond, *other_output_uncond = self.model(
+                x, k, uncond_cond, uncond_cond_mask, **kwargs
+            )
+            model_output = model_output_uncond + cfg_scale * (model_output_cond - model_output_uncond)
+            other_output = other_output_cond  # (other_output_uncond, other_output_cond)
 
         if self.objective == "pred_noise":
             pred_noise = torch.clamp(model_output, -self.clip_noise, self.clip_noise)
@@ -170,7 +199,6 @@ class DiscreteDiffusion(nn.Module):
             pred_noise = self.predict_noise_from_v(x, k, v)
 
         model_pred = ModelPrediction(pred_noise, x_start, model_output)
-
         return model_pred, other_output
 
     def predict_start_from_noise(self, x_k, k, noise):
@@ -318,31 +346,31 @@ class DiscreteDiffusion(nn.Module):
     def diffusion_loss_for_noise_level(
         self,
         x: torch.Tensor,
-        noise_level: torch.Tensor,           # shape [B, T], or broadcastable to [B, T]
+        noise_level: torch.Tensor,  # shape [B, T], or broadcastable to [B, T]
         conditions: Optional[torch.Tensor] = None,
-        #guidance_fn: Optional[Callable] = None,
+        # guidance_fn: Optional[Callable] = None,
         context_frame_mask: Optional[torch.Tensor] = None,
         sliding_context_len: Optional[int] = None,
         return_per_token_loss: bool = False,
-        **kwargs
+        **kwargs,
     ):
         """
         Compute a single-step diffusion loss at the given `noise_level`,
         by sliding over the entire sequence in windows of up to `self.max_tokens`.
-        
+
         Args:
             x: shape [B, T, ...], the ground-truth sequence of length T.
-            noise_level: shape [B, T] (or broadcastable). 
-                        The fixed noise-level for each token. 
+            noise_level: shape [B, T] (or broadcastable).
+                        The fixed noise-level for each token.
             conditions: optional, shape [B, T, ...], e.g. external conditions.
-            guidance_fn: optional, if you do classifier-free or other guidance. 
+            guidance_fn: optional, if you do classifier-free or other guidance.
             context_frame_mask: shape [B, T] (0=to-be-predicted, 1=ground-truth context).
             sliding_context_len: how many tokens from the "past" to include as context
                                 for each chunk. Defaults to `self.max_tokens - 1` or
                                 requires manual setting if T > self.max_tokens.
             return_per_token_loss: if True, return the full loss tensor [B,T,...].
             ...
-            
+
         Returns:
             total_loss: scalar if return_per_token_loss=False, else the full [B,T,...].
         """
@@ -366,21 +394,19 @@ class DiscreteDiffusion(nn.Module):
         # Create the noised input at this single noise_level
         # -----------------------------------------------------
         # You presumably have a q_sample(...) that does: x_noised = sqrt(α)*x + sqrt(1-α)*noise, etc.
-        # Or you can replicate your approach in forward_1(...) 
+        # Or you can replicate your approach in forward_1(...)
         noise = torch.randn_like(x)
         noise = torch.clamp(noise, -self.clip_noise, self.clip_noise)
-        x_noised = self.q_sample(
-            x_start=x,
-            k=noise_level,    # shape [B, T]
-            noise=noise
-        )
+        x_noised = self.q_sample(x_start=x, k=noise_level, noise=noise)  # shape [B, T]
         n_context_frames = (1 - context_frame_mask.int()).sum(-1)[0].item()
         context = x[:, :n_context_frames].clone()
-        context = torch.cat([
-            context, torch.zeros(B, T - n_context_frames, *x_shape).to(device, x.dtype)
-        ], dim=1)
-        
-
+        context = torch.cat(
+            [
+                context,
+                torch.zeros(B, T - n_context_frames, *x_shape).to(device, x.dtype),
+            ],
+            dim=1,
+        )
 
         out_pred = torch.zeros_like(x)
         loss_accumulator = torch.zeros_like(x_noised)  # [B, T, ...] same shape as x
@@ -392,55 +418,66 @@ class DiscreteDiffusion(nn.Module):
         neural_memory_cache = None
         while curr_token < T:
             # chunk size
-            c = min(sliding_context_len, curr_token)                 # how many frames of context
-            h = min(T - curr_token, self.max_tokens - c)            # how many frames of "new" to process
+            c = min(sliding_context_len, curr_token)  # how many frames of context
+            h = min(
+                T - curr_token, self.max_tokens - c
+            )  # how many frames of "new" to process
             start = curr_token - c
             end = start + (c + h)
-            print(f"curr_token: {curr_token}, start: {start}, end: {end}, curr_token: {curr_token}, h: {h}, c: {c}")
+            print(
+                f"curr_token: {curr_token}, start: {start}, end: {end}, curr_token: {curr_token}, h: {h}, c: {c}"
+            )
 
             chunk_slice = slice(start, end)  # the frames [start, end)
 
-            chunk_x = x[:, chunk_slice].clone()                 # ground truth
-            chunk_x_noised = x_noised[:, chunk_slice].clone()   # noised input
-            chunk_noise_level = noise_level[:, chunk_slice]     # noise-level for these frames
-            context_chunk = context[:, chunk_slice].clone()     # context frames
-
+            chunk_x = x[:, chunk_slice].clone()  # ground truth
+            chunk_x_noised = x_noised[:, chunk_slice].clone()  # noised input
+            chunk_noise_level = noise_level[
+                :, chunk_slice
+            ]  # noise-level for these frames
+            context_chunk = context[:, chunk_slice].clone()  # context frames
 
             chunk_cond = None
             if conditions is not None:
                 chunk_cond = conditions[:, chunk_slice].clone()
 
             if True:
-               chunk_x_noised = torch.cat([chunk_x_noised, context_chunk], dim=2) 
+                chunk_x_noised = torch.cat([chunk_x_noised, context_chunk], dim=2)
 
             model_pred, *aux_output = self.model_predictions(
                 x=chunk_x_noised,
                 k=chunk_noise_level,
                 external_cond=chunk_cond,
-                #guidance_fn=guidance_fn,
+                # guidance_fn=guidance_fn,
                 neural_memory_cache=neural_memory_cache,
-                **kwargs
+                **kwargs,
             )
             neural_memory_cache, aux_output = aux_output[0]
 
-            pred = model_pred.model_out   # shape [B, chunk_len, D], e.g. predicted noise
+            pred = model_pred.model_out  # shape [B, chunk_len, D], e.g. predicted noise
             out_x_pred = model_pred.pred_x_start
             if True:
-                pred = pred[:, :, :context_chunk.shape[2]]
-                out_x_pred = out_x_pred[:, :, :context_chunk.shape[2]]
+                pred = pred[:, :, : context_chunk.shape[2]]
+                out_x_pred = out_x_pred[:, :, : context_chunk.shape[2]]
 
             if self.objective == "pred_noise":
                 target_chunk = noise[:, chunk_slice]
             elif self.objective == "pred_x0":
                 target_chunk = chunk_x
             elif self.objective == "pred_v":
-                target_chunk = self.predict_v(chunk_x, chunk_noise_level, noise[:, chunk_slice])
+                target_chunk = self.predict_v(
+                    chunk_x, chunk_noise_level, noise[:, chunk_slice]
+                )
             else:
                 raise ValueError(f"Unknown objective {self.objective}")
 
-            chunk_loss = F.mse_loss(pred, target_chunk.detach(), reduction="none")  # [B, chunk_len, D]
+            chunk_loss = F.mse_loss(
+                pred, target_chunk.detach(), reduction="none"
+            )  # [B, chunk_len, D]
 
-            loss_weight = self.compute_loss_weights(chunk_noise_level, self.loss_weighting.strategy)
+            loss_weight = self.compute_loss_weights(
+                chunk_noise_level, self.loss_weighting.strategy
+            )
             loss_weight = self.add_shape_channels(loss_weight)
             chunk_loss = chunk_loss * loss_weight
 
@@ -451,16 +488,15 @@ class DiscreteDiffusion(nn.Module):
 
         return out_pred, loss_accumulator, None
 
-
     def forward_1(self, x, external_cond, k, context_frame_mask=None, **kwargs):
         batch_size, n_frames, *x_shape = x.shape
         xs_pred = []
         curr_frame = 0
 
         # context
-        n_context_frames = (1-context_frame_mask.int()).sum(-1)[0].item()
-        xs_pred = x[: ,:n_context_frames].clone()
-        #curr_frame += n_context_frames
+        n_context_frames = (1 - context_frame_mask.int()).sum(-1)[0].item()
+        xs_pred = x[:, :n_context_frames].clone()
+        # curr_frame += n_context_frames
         chunk_size = self.max_tokens
 
         xs_pred_noised = xs_pred.clone()
@@ -468,12 +504,17 @@ class DiscreteDiffusion(nn.Module):
         noise = torch.randn_like(x)
         noise = torch.clamp(noise, -self.clip_noise, self.clip_noise)
         gt_xs_noised = self.q_sample(x_start=x, k=k, noise=noise)
-        context = x[: ,:n_context_frames].clone()
-        context = torch.cat([
-            context, torch.zeros(batch_size, n_frames - n_context_frames, *x_shape).to(x.device, x.dtype)
-        ],
-        dim=1)
-        xs_in_noised = torch.cat([ gt_xs_noised, context], 2)
+        context = x[:, :n_context_frames].clone()
+        context = torch.cat(
+            [
+                context,
+                torch.zeros(batch_size, n_frames - n_context_frames, *x_shape).to(
+                    x.device, x.dtype
+                ),
+            ],
+            dim=1,
+        )
+        xs_in_noised = torch.cat([gt_xs_noised, context], 2)
         x_pred = torch.zeros_like(x)
 
         total_loss = torch.zeros_like(x)
@@ -488,17 +529,29 @@ class DiscreteDiffusion(nn.Module):
             # sliding window: only input the last n_tokens frames
             start_frame = max(0, curr_frame + horizon - self.max_tokens)
 
-            print(f"start_frame: {start_frame}, curr_frame: {curr_frame}, horizon: {horizon}")
+            print(
+                f"start_frame: {start_frame}, curr_frame: {curr_frame}, horizon: {horizon}"
+            )
 
             chunk_x = x[:, start_frame : start_frame + self.max_tokens]
             chunk_noise = noise[:, start_frame : start_frame + self.max_tokens]
-            chunk_xs_in_noised = xs_in_noised[:, start_frame : start_frame + self.max_tokens]
-            chunk_cond = external_cond[:, start_frame : start_frame + self.max_tokens] if external_cond is not None else None
+            chunk_xs_in_noised = xs_in_noised[
+                :, start_frame : start_frame + self.max_tokens
+            ]
+            chunk_cond = (
+                external_cond[:, start_frame : start_frame + self.max_tokens]
+                if external_cond is not None
+                else None
+            )
             chunk_k = k[:, start_frame : start_frame + self.max_tokens]
 
             model_pred, *aux_output = self.model_predictions(
-                x=chunk_xs_in_noised, k=chunk_k, external_cond=chunk_cond, neural_memory_cache=neural_memory_cache, **kwargs
-        )
+                x=chunk_xs_in_noised,
+                k=chunk_k,
+                external_cond=chunk_cond,
+                neural_memory_cache=neural_memory_cache,
+                **kwargs,
+            )
             neural_memory_cache, aux_output = aux_output[0]
 
             out_pred = model_pred.model_out
@@ -509,7 +562,7 @@ class DiscreteDiffusion(nn.Module):
                 out_x_pred = out_x_pred[:, :, :3]
 
             pred = out_pred
-            x_pred[:, start_frame: start_frame + horizon] = out_x_pred[:, :horizon]
+            x_pred[:, start_frame : start_frame + horizon] = out_x_pred[:, :horizon]
 
             if self.objective == "pred_noise":
                 target = noise
@@ -522,17 +575,17 @@ class DiscreteDiffusion(nn.Module):
 
             loss = F.mse_loss(pred, target.detach(), reduction="none")
 
-            loss_weight = self.compute_loss_weights(chunk_k, self.loss_weighting.strategy)
+            loss_weight = self.compute_loss_weights(
+                chunk_k, self.loss_weighting.strategy
+            )
             loss_weight = self.add_shape_channels(loss_weight)
             loss = loss * loss_weight
-            total_loss[:, start_frame: start_frame + horizon] = loss[:, :horizon]
+            total_loss[:, start_frame : start_frame + horizon] = loss[:, :horizon]
 
             curr_frame += horizon
 
-        return x_pred, total_loss, None 
-        #return x_pred[:, :n_frames], total_loss[:, :n_frames], aux_output
-
-
+        return x_pred, total_loss, None
+        # return x_pred[:, :n_frames], total_loss[:, :n_frames], aux_output
 
     def forward(
         self,
@@ -540,17 +593,17 @@ class DiscreteDiffusion(nn.Module):
         external_cond: Optional[torch.Tensor],
         k: torch.Tensor,
         context_frame_mask: Optional[torch.Tensor] = None,
-        **kwargs, 
+        **kwargs,
     ):
         noise = torch.randn_like(x)
         noise = torch.clamp(noise, -self.clip_noise, self.clip_noise)
 
         noised_x = self.q_sample(x_start=x, k=k, noise=noise)
         if context_frame_mask is not None:
-            context_frames = x * ( 1 - context_frame_mask[..., None, None, None].int())
-#            if torch.rand(1) < 0.2:
-#                context_frames = torch.zeros_like(context_frames)
-#
+            context_frames = x * (1 - context_frame_mask[..., None, None, None].int())
+            #            if torch.rand(1) < 0.2:
+            #                context_frames = torch.zeros_like(context_frames)
+            #
             noised_x = torch.cat([noised_x, context_frames], dim=2)
         model_pred, *aux_output = self.model_predictions(
             x=noised_x, k=k, external_cond=external_cond, **kwargs
@@ -594,6 +647,7 @@ class DiscreteDiffusion(nn.Module):
         external_cond: Optional[torch.Tensor],
         external_cond_mask: Optional[torch.Tensor] = None,
         guidance_fn: Optional[Callable] = None,
+        cfg_scale: float = 1.0,
         **kwargs,
     ):
         if self.is_ddim_sampling:
@@ -604,6 +658,7 @@ class DiscreteDiffusion(nn.Module):
                 external_cond=external_cond,
                 external_cond_mask=external_cond_mask,
                 guidance_fn=guidance_fn,
+                cfg_scale=cfg_scale,
                 **kwargs,
             )
 
@@ -664,6 +719,7 @@ class DiscreteDiffusion(nn.Module):
         external_cond: Optional[torch.Tensor],
         external_cond_mask: Optional[torch.Tensor] = None,
         guidance_fn: Optional[Callable] = None,
+        cfg_scale: float = 1.0,
         **kwargs,
     ):
 
@@ -725,6 +781,7 @@ class DiscreteDiffusion(nn.Module):
                 k=clipped_curr_noise_level,
                 external_cond=external_cond,
                 external_cond_mask=external_cond_mask,
+                cfg_scale=cfg_scale,
                 **kwargs,
             )
             x_start = model_pred.pred_x_start

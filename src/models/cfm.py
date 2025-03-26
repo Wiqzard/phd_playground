@@ -159,7 +159,9 @@ class CFMLitModule(LightningModule):
         if self.ot_sampler is not None:
             x0, x1 = self.ot_sampler.sample_plan(x0, x1)
 
-        x, ut, t, mu_t, sigma_t, eps_t = self.calc_loc_and_target(x0, x1, t, t_select, training)
+        x, ut, t, mu_t, sigma_t, eps_t = self.calc_loc_and_target(
+            x0, x1, t, t_select, training
+        )
 
         if self.hparams.avg_size > 0:
             x, ut, t = self.average_ut(x, t, mu_t, sigma_t, ut)
@@ -193,9 +195,9 @@ class CFMLitModule(LightningModule):
             t_span = torch.linspace(0, 1, 2)
         else:
             raise NotImplementedError(f"Unknown test procedure {self.hparams.test_nfe}")
-        traj = solver.odeint(torch.randn(batch[0].shape[0], *self.dim).type_as(batch[0]), t_span)[
-            -1
-        ]
+        traj = solver.odeint(
+            torch.randn(batch[0].shape[0], *self.dim).type_as(batch[0]), t_span
+        )[-1]
         os.makedirs("images", exist_ok=True)
         mean = [-x / 255.0 for x in [125.3, 123.0, 113.9]]
         std = [255.0 / x for x in [63.0, 62.1, 66.7]]
@@ -216,7 +218,11 @@ class CFMLitModule(LightningModule):
             self.image_eval_step(batch, batch_idx, prefix)
         shapes = [b.shape[0] for b in batch]
 
-        if not self.is_image and prefix == "val" and shapes.count(shapes[0]) == len(shapes):
+        if (
+            not self.is_image
+            and prefix == "val"
+            and shapes.count(shapes[0]) == len(shapes)
+        ):
             reg, mse = self.step(batch, training=False)
             loss = mse + reg
             self.log_dict(
@@ -303,7 +309,9 @@ class CFMLitModule(LightningModule):
                 path = "/home/mila/a/alexander.tong/scratch/trajectory-inference/data/fid_stats_cifar10_train.npz"
                 from pytorch_fid import fid_score
 
-                fid = fid_score.calculate_fid_given_paths(["images", path], 256, "cuda", 2048, 0)
+                fid = fid_score.calculate_fid_given_paths(
+                    ["images", path], 256, "cuda", 2048, 0
+                )
                 self.log(f"{prefix}/fid", fid)
 
         ts, x, x0, x_rest = self.preprocess_epoch_end(outputs, prefix)

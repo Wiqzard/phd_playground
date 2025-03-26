@@ -301,13 +301,19 @@ class NeuralMemory2(Module):
         self.heads = heads
 
         self.split_heads = Rearrange("b n (h d) -> b h n d", h=heads)
-        self.split_kv_heads = Rearrange("b n (h u d) -> b h (n u) d", h=heads, u=num_kv_per_token)
+        self.split_kv_heads = Rearrange(
+            "b n (h u d) -> b h (n u) d", h=heads, u=num_kv_per_token
+        )
 
         self.merge_heads = Rearrange("b h n d -> b n (h d)")
-        self.combine_heads = LinearNoBias(dim_inner, dim) if heads > 1 else nn.Identity()
+        self.combine_heads = (
+            LinearNoBias(dim_inner, dim) if heads > 1 else nn.Identity()
+        )
 
         self.retrieve_gate = (
-            Sequential(LinearNoBias(dim, heads), Rearrange("b n h -> b h n 1"), nn.Sigmoid())
+            Sequential(
+                LinearNoBias(dim, heads), Rearrange("b n h -> b h n 1"), nn.Sigmoid()
+            )
             if heads > 1
             else None
         )
@@ -319,7 +325,9 @@ class NeuralMemory2(Module):
 
         # validate memory model
 
-        assert not exists(next(model.buffers(), None)), "model cannot have buffers for now"
+        assert not exists(
+            next(model.buffers(), None)
+        ), "model cannot have buffers for now"
 
         test_shape = (3, 2, dim_head)
 
@@ -328,7 +336,9 @@ class NeuralMemory2(Module):
                 test_input = torch.randn(test_shape)
                 mem_model_output = model(test_input)
             except:
-                raise RuntimeError(f"memory model unable to accept a tensor of shape {test_shape}")
+                raise RuntimeError(
+                    f"memory model unable to accept a tensor of shape {test_shape}"
+                )
 
             assert (
                 mem_model_output.shape == test_shape
@@ -490,7 +500,9 @@ class NeuralMemory2(Module):
 
         # weight decay factor
 
-        self.to_decay_factor = Sequential(nn.Linear(dim, heads), Rearrange("b n h -> (b h) n 1"))
+        self.to_decay_factor = Sequential(
+            nn.Linear(dim, heads), Rearrange("b n h -> (b h) n 1")
+        )
 
         # learned transition, as seeing instability when decreasing neural mem batch size
         # perhaps it can slowly learn to adjust from early residual to fully transitioning to new weights every batch size
@@ -575,7 +587,11 @@ class NeuralMemory2(Module):
 
         # shapes and variables
 
-        heads, chunk_size, num_updates = self.heads, self.store_chunk_size, self.num_kv_per_token
+        heads, chunk_size, num_updates = (
+            self.heads,
+            self.store_chunk_size,
+            self.num_kv_per_token,
+        )
 
         # curtail sequence by multiple of the chunk size
         # only a complete chunk of the sequence provides the memory for the next chunk
@@ -583,7 +599,10 @@ class NeuralMemory2(Module):
         round_down_seq_len = round_down_multiple(seq_len, chunk_size)
         num_chunks = round_down_seq_len // chunk_size
 
-        seq, remainder = seq[..., :round_down_seq_len, :], seq[..., round_down_seq_len:, :]
+        seq, remainder = (
+            seq[..., :round_down_seq_len, :],
+            seq[..., round_down_seq_len:, :],
+        )
 
         next_seq_len_index = seq_index + round_down_seq_len
 
@@ -597,7 +616,9 @@ class NeuralMemory2(Module):
 
         # allow for neural memory of a previous layer to influence surprise of current layer
 
-        weights_for_surprise = repeat_dict_values(weights, "b ... -> b n ...", n=num_chunks)
+        weights_for_surprise = repeat_dict_values(
+            weights, "b ... -> b n ...", n=num_chunks
+        )
 
         # initial norm
 
@@ -631,7 +652,9 @@ class NeuralMemory2(Module):
                 combine_momentums = self.to_learned_momentum_combine(chunked_seq)
 
         if need_layer_lr_mod:
-            layer_lr_mod = self.to_layer_modulation(chunked_seq) * self.max_mem_layer_modulation
+            layer_lr_mod = (
+                self.to_layer_modulation(chunked_seq) * self.max_mem_layer_modulation
+            )
 
         # keys and values
 
@@ -649,7 +672,9 @@ class NeuralMemory2(Module):
         # take care of chunking
 
         keys, values = tuple(
-            rearrange(t, "b h (n c u) d -> (b h n) (c u) d", c=chunk_size, u=num_updates)
+            rearrange(
+                t, "b h (n c u) d -> (b h n) (c u) d", c=chunk_size, u=num_updates
+            )
             for t in (keys, values)
         )
 
@@ -663,7 +688,9 @@ class NeuralMemory2(Module):
 
         if exists(mask):
             mask = mask[..., :round_down_seq_len]
-            mask = repeat(mask, "b (n c) -> (b h n) (c u)", h=heads, u=num_updates, c=chunk_size)
+            mask = repeat(
+                mask, "b (n c) -> (b h n) (c u)", h=heads, u=num_updates, c=chunk_size
+            )
 
             adaptive_lr = torch.where(mask, adaptive_lr, 0.0)
 
@@ -689,7 +716,9 @@ class NeuralMemory2(Module):
 
         # flatten batch and time if surprise depends on previous layer memory model
 
-        weights_for_surprise = rearrange_dict_values(weights_for_surprise, "b n ... -> (b n) ...")
+        weights_for_surprise = rearrange_dict_values(
+            weights_for_surprise, "b n ... -> (b n) ..."
+        )
 
         # get grads and extra auxiliary loss (for backwarding through qkv projection in base neural memory module)
 
@@ -799,12 +828,16 @@ class NeuralMemory2(Module):
 
                 if learned_combine and self.learned_combine_include_zeroth:
                     # add the original surprise if learned combination of momentums
-                    momentums = cat((rearrange(surprise, "... -> 1 ..."), momentums), dim=0)
+                    momentums = cat(
+                        (rearrange(surprise, "... -> 1 ..."), momentums), dim=0
+                    )
 
                 if not learned_combine:
                     update = momentums[-1]
                 else:
-                    update = einsum(combine_momentums, momentums, "o b n, o b n ... -> b n ...")
+                    update = einsum(
+                        combine_momentums, momentums, "o b n, o b n ... -> b n ..."
+                    )
 
             # use associative scan again for learned forgetting (weight decay) - eq (13)
 
@@ -1082,16 +1115,18 @@ class NeuralMemory2(Module):
     ):
         chunk_size = self.retrieve_chunk_size
 
-        weights_have_expanded_shape = dict_get_value_shapes(weights) != self.init_weight_shape
+        weights_have_expanded_shape = (
+            dict_get_value_shapes(weights) != self.init_weight_shape
+        )
 
         batch, seq_len = seq.shape[:2]
 
         # auto infer single token decoding, if there are only 1 set of weights and 1 token
 
         is_one_token = seq_len == 1
-        is_one_weight = (not weights_have_expanded_shape) or next(iter(weights.values())).shape[
-            1
-        ] == 1
+        is_one_weight = (not weights_have_expanded_shape) or next(
+            iter(weights.values())
+        ).shape[1] == 1
 
         is_single_token_decode = is_one_token and is_one_weight
 
@@ -1223,7 +1258,9 @@ class NeuralMemory2(Module):
         # determine split sizes and when to update
 
         if need_update_weights:
-            update_after_final_store = divisible_by(seq_index + store_seq_len, batch_size)
+            update_after_final_store = divisible_by(
+                seq_index + store_seq_len, batch_size
+            )
 
             seq_range = torch.arange(store_seq_len) + seq_index + 1
             batch_boundary = divisible_by(seq_range, batch_size)
@@ -1276,7 +1313,9 @@ class NeuralMemory2(Module):
         if exists(self.transition_gate):
             gate = self.transition_gate.sigmoid()
 
-        for ind, (store_seq_chunk, maybe_store_mask) in enumerate(zip(store_seqs, store_masks)):
+        for ind, (store_seq_chunk, maybe_store_mask) in enumerate(
+            zip(store_seqs, store_masks)
+        ):
             is_last = ind == (len(store_seqs) - 1)
 
             # store
@@ -1297,7 +1336,9 @@ class NeuralMemory2(Module):
 
             updates = accum_updates(updates, next_updates)
 
-            surprises = tuple(safe_cat(args, dim=-1) for args in zip(surprises, chunk_surprises))
+            surprises = tuple(
+                safe_cat(args, dim=-1) for args in zip(surprises, chunk_surprises)
+            )
 
             if is_last and not update_after_final_store:
                 continue
@@ -1356,9 +1397,11 @@ if __name__ == "__main__":
     from titans.titans_pytorch.neural_memory import NeuralMemory
 
     model = MemoryMoE(192, depth=2, num_experts=8)  # model=MemoryMLP(192, depth=2),
-    neural_memory = NeuralMemory(192, chunk_size=128, batch_size=128, moe=True, model=model)
-    #model = MemoryMLP(192, depth=2)
-    #neural_memory = NeuralMemory(192, chunk_size=128, batch_size=128, moe=False, model=model)
+    neural_memory = NeuralMemory(
+        192, chunk_size=128, batch_size=128, moe=True, model=model
+    )
+    # model = MemoryMLP(192, depth=2)
+    # neural_memory = NeuralMemory(192, chunk_size=128, batch_size=128, moe=False, model=model)
     test_seq = torch.randn(4, 256, 192)
     retrieved, next_neural_mem_state = neural_memory(test_seq)
     retrieved, next_neural_mem_state = neural_memory(

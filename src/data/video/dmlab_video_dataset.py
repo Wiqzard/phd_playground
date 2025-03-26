@@ -94,7 +94,9 @@ if __name__ == "__main__":
     cfg.validation_multiplier = 1
 
     dataset = DmlabVideoDataset(cfg, "training")
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=4, shuffle=True, num_workers=16)
+    dataloader = torch.utils.data.DataLoader(
+        dataset, batch_size=4, shuffle=True, num_workers=16
+    )
 
     print("finished")
     for batch in tqdm.tqdm(dataloader):

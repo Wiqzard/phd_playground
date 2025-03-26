@@ -20,14 +20,16 @@ class BasePytorchAlgo(pl.LightningModule, ABC):
     See https://lightning.ai/docs/pytorch/stable/starter/introduction.html for more details.
     """
 
-    def __init__(self, cfg: DictConfig,
-                 debug: bool = False,
-                 should_validate_ema_weights: bool = False):
+    def __init__(
+        self,
+        cfg: DictConfig,
+        debug: bool = False,
+        should_validate_ema_weights: bool = False,
+    ):
         super().__init__()
         self.cfg = cfg
         self.debug = self.cfg.debug
         self.should_validate_ema_weights = False
-
 
     @abstractmethod
     def training_step(self, *args: Any, **kwargs: Any) -> STEP_OUTPUT:
@@ -84,7 +86,6 @@ class BasePytorchAlgo(pl.LightningModule, ABC):
         """
         return super().training_step(*args, **kwargs)
 
-    
     def configure_optimizers(self):
         """
         Return an optimizer. If you need to use more than one optimizer, refer to pytorch lightning documentation:
@@ -94,7 +95,9 @@ class BasePytorchAlgo(pl.LightningModule, ABC):
             parameters = self.parameters()
             return torch.optim.Adam(parameters, lr=self.lr)
         else:
-            raise NotImplementedError("Please implement configure_optimizers in your LightningModule.")
+            raise NotImplementedError(
+                "Please implement configure_optimizers in your LightningModule."
+            )
 
     def on_load_checkpoint(self, checkpoint: dict) -> None:
         if self.should_validate_ema_weights:

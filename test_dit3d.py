@@ -10,17 +10,18 @@ import torch
 # Suppose the code for MemoryDiT3D is in memory_dit_3d.py
 # from memory_dit_3d import MemoryDiT3D
 
+
 def quick_test_forward():
     # 1) Create a dummy model
     model = MemoryDiT3D(
         x_shape=torch.Size([3, 64, 64]),  # (channels, height, width)
-        max_tokens=4,                     # e.g. up to T=4 frames if you like
+        max_tokens=4,  # e.g. up to T=4 frames if you like
         external_cond_dim=32,
         hidden_size=128,
         patch_size=8,
         variant="full",
         pos_emb_type="learned_1d",
-        depth=4,       # shorter depth to keep it small for a quick test
+        depth=4,  # shorter depth to keep it small for a quick test
         num_heads=4,
         mlp_ratio=2.0,
         use_gradient_checkpointing=False,
@@ -31,7 +32,7 @@ def quick_test_forward():
         batch_size=16,
         depth_memory=2,
         memory_layer_indices=[1, 3],  # some small set of memory slots
-        momentum=True
+        momentum=True,
     )
 
     # 2) Create a dummy input
@@ -54,7 +55,7 @@ def quick_test_forward():
             x,
             noise_levels,
             external_cond=external_cond,
-            neural_memory_cache=None  # no previous memory states
+            neural_memory_cache=None,  # no previous memory states
         )
 
     # 6) Print some info
@@ -65,12 +66,12 @@ def quick_test_forward():
             if item is not None:
                 print(f"  Memory cache[{i}] shape(s): {[t.shape for t in item]}")
 
+
 if __name__ == "__main__":
     quick_test_forward()
 
 
-
-#def quick_test_dit3d():
+# def quick_test_dit3d():
 #    # Example input parameters
 #    B, T = 2, 4   # Batch size, temporal length
 #    H, W = 64, 64 # Spatial resolution
@@ -111,6 +112,6 @@ if __name__ == "__main__":
 #    print(f"Output shape: {output.shape}")
 #    print(0)
 #
-#if __name__ == "__main__":
+# if __name__ == "__main__":
 #    quick_test_dit3d()
 #

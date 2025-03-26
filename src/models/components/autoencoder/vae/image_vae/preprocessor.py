@@ -15,7 +15,15 @@ class ImageVAEPreprocessor(BaseLightningTrainer):
     An algorithm for preprocessing videos to latents using a pretrained ImageVAE model.
     """
 
-    def __init__(self, pretrained_path: str, pretrained_kwargs: DictConfig, precision: str, max_encode_length: int, max_video_length: int, every_n_batch: int):
+    def __init__(
+        self,
+        pretrained_path: str,
+        pretrained_kwargs: DictConfig,
+        precision: str,
+        max_encode_length: int,
+        max_video_length: int,
+        every_n_batch: int,
+    ):
         self.pretrained_path = pretrained_path
         self.pretrained_kwargs = pretrained_kwargs
         self.use_fp16 = precision == "16-true"
@@ -23,7 +31,7 @@ class ImageVAEPreprocessor(BaseLightningTrainer):
         self.max_decode_length = max_video_length
         self.log_every_n_batch = every_n_batch
         super().__init__()
-
+        self._build_model()
 
     def _build_model(self):
         self.vae = ImageVAE.from_pretrained(

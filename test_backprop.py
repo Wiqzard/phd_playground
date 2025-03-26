@@ -6,8 +6,16 @@ from insert_memory import DiT3DTTT
 
 torch.autograd.set_detect_anomaly(True)
 # Assuming DiT3DTTT and scheduler are correctly imported and initialized
-model = DiT3DTTT(depth=12, input_size=64, in_channels=6, hidden_size=768, patch_size=8, num_heads=12, max_frames=16,
-                 out_channels=3).cuda()
+model = DiT3DTTT(
+    depth=12,
+    input_size=64,
+    in_channels=6,
+    hidden_size=768,
+    patch_size=8,
+    num_heads=12,
+    max_frames=16,
+    out_channels=3,
+).cuda()
 model.train()
 
 # Optimizer and criterion
@@ -59,11 +67,18 @@ for i in range(2):
 
     if True:
         noise_pred, memory_states = model.forward(
-            x_noisy_i, timesteps, cond=y, cache_params=memory_states, use_cache=True, run=i
+            x_noisy_i,
+            timesteps,
+            cond=y,
+            cache_params=memory_states,
+            use_cache=True,
+            run=i,
         )
     else:
-        noise_pred = model.forward(x_noisy_i, timesteps, cond=y, cache_params=memory_states, use_cache=False)
-    
+        noise_pred = model.forward(
+            x_noisy_i, timesteps, cond=y, cache_params=memory_states, use_cache=False
+        )
+
     x_pred = scheduler.get_velocity(
         sample=noise_pred, noise=x_noisy_i[:, :, :3], timesteps=timesteps
     )

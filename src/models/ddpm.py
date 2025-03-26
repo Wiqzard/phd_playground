@@ -12,7 +12,6 @@ from tqdm import tqdm
 from diffusers import DDPMScheduler
 
 
-
 ###############################################################################
 # Helper Function: Video Preprocessing for Logging (Optional)
 ###############################################################################
@@ -71,10 +70,12 @@ class DiffusionModelTrainer(LightningModule):
             kwargs: Additional hyperparameters.
         """
         super().__init__()
-        self.save_hyperparameters(ignore=("model", "optimizer", "lr_scheduler", "scheduler"))
+        self.save_hyperparameters(
+            ignore=("model", "optimizer", "lr_scheduler", "scheduler")
+        )
         self.model = model
 
-        self.optimizer= optimizer
+        self.optimizer = optimizer
         self.lr_scheduler = lr_scheduler
         self.compile_model = compile
 
@@ -94,7 +95,9 @@ class DiffusionModelTrainer(LightningModule):
         self.val_loss = MeanMetric()
         self.test_loss = MeanMetric()
 
-    def training_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
+    def training_step(
+        self, batch: Dict[str, torch.Tensor], batch_idx: int
+    ) -> torch.Tensor:
         """
         Training step that jointly trains the autoencoder and the diffusion process.
         It computes:
@@ -111,13 +114,13 @@ class DiffusionModelTrainer(LightningModule):
             latent = self.model.autoencoder.encode(x_frame)
             x_recon = self.model.autoencoder.decode(latent)
             recon_loss = F.mse_loss(x_recon, x_frame)
-            latent = latent.detach()  
+            latent = latent.detach()
             img_latent = self.model.autoencoder.encode(img)
         else:
             latent = x_frame
             recon_loss = 0.0
             img_latent = img
-        
+
         if True:
             # sample random noise with random strenth for image
             sigma = torch.rand(1, device=latent.device) * 1
@@ -128,19 +131,23 @@ class DiffusionModelTrainer(LightningModule):
             b, c, h, w = img_latent.shape
             num_blocks_h = h // block_size
             num_blocks_w = w // block_size
-            block_mask = (torch.rand(b, 1, num_blocks_h, num_blocks_w, device=img_latent.device) < mask_prob).float()
-            mask = F.interpolate(block_mask, size=(h, w), mode='nearest')
+            block_mask = (
+                torch.rand(b, 1, num_blocks_h, num_blocks_w, device=img_latent.device)
+                < mask_prob
+            ).float()
+            mask = F.interpolate(block_mask, size=(h, w), mode="nearest")
             img_masked = img_latent * (1 - mask)
             img_latent = img_latent + noise
-
-
 
         # ----- Diffusion branch: Compute diffusion loss -----
         # Sample noise and add it to the latent representation
         noise = torch.randn_like(latent)
         batch_size = latent.shape[0]
         timesteps = torch.randint(
-            0, self.scheduler.config.num_train_timesteps, (batch_size,), device=latent.device
+            0,
+            self.scheduler.config.num_train_timesteps,
+            (batch_size,),
+            device=latent.device,
         ).long()
         latent_noisy = self.scheduler.add_noise(latent, noise, timesteps)
 
@@ -152,9 +159,11 @@ class DiffusionModelTrainer(LightningModule):
         noise_pred = self.model.forward(noisy_cond, timesteps, y=y)
 
         # Optionally, if your scheduler requires only a subset of channels, slice them
-        latent_noisy_slice = noisy_cond[:, :latent.shape[1]]
+        latent_noisy_slice = noisy_cond[:, : latent.shape[1]]
         # Get the predicted latent velocity (or denoised latent) from the scheduler
-        latent_pred = self.scheduler.get_velocity(sample=noise_pred, noise=latent_noisy_slice, timesteps=timesteps)
+        latent_pred = self.scheduler.get_velocity(
+            sample=noise_pred, noise=latent_noisy_slice, timesteps=timesteps
+        )
 
         alphas_cumprod = self.scheduler.alphas_cumprod[timesteps]
         weights = 1 / (1 - alphas_cumprod)
@@ -172,9 +181,18 @@ class DiffusionModelTrainer(LightningModule):
         self.recon_loss.update(recon_loss)
         self.diffusion_loss.update(diffusion_loss)
         self.log("train/loss", total_loss, on_step=True, on_epoch=False, prog_bar=True)
-        self.log("train/recon_loss", recon_loss, on_step=True, on_epoch=False, prog_bar=True)
-        self.log("train/diffusion_loss", diffusion_loss, on_step=True, on_epoch=False, prog_bar=True)
+        self.log(
+            "train/recon_loss", recon_loss, on_step=True, on_epoch=False, prog_bar=True
+        )
+        self.log(
+            "train/diffusion_loss",
+            diffusion_loss,
+            on_step=True,
+            on_epoch=False,
+            prog_bar=True,
+        )
         return total_loss
+
     def loss(self, pred, target, weight=None):
         if weight is None:
             weight = torch.ones_like(pred)
@@ -191,7 +209,7 @@ class DiffusionModelTrainer(LightningModule):
         # Reverse Diffusion: Generate a sample from noise.
         # ---------
         x = batch["video"].to(self.device)  # shape: (B, C, T, H, W)
-        x = x[:, :, 1].squeeze(2)           # now shape: (B, C, H, W)
+        x = x[:, :, 1].squeeze(2)  # now shape: (B, C, H, W)
 
         # Use the batch's first frame as the initial conditioning frame
         img = batch["first_frame"]
@@ -199,7 +217,7 @@ class DiffusionModelTrainer(LightningModule):
             x = self.model.autoencoder.encode(x)
             img = self.model.autoencoder.encode(img)
 
-        sample_shape = x.shape             # will be used to initialize noise
+        sample_shape = x.shape  # will be used to initialize noise
 
         # Prepare the action labels
         y = torch.argmax(batch["action"].squeeze(1), dim=1) + 1
@@ -210,11 +228,11 @@ class DiffusionModelTrainer(LightningModule):
         # Define the number of runs (each run uses the previous run's generated frame as conditioning)
         num_runs = self.hparams.num_gen_steps  # Or use a different variable if needed
 
-        img  = img + torch.randn_like(img) * 0.1
+        img = img + torch.randn_like(img) * 0.1
         video = [img]
-        #for run in tqdm(range(num_runs), desc="Generating Samples"):
+        # for run in tqdm(range(num_runs), desc="Generating Samples"):
         for run in range(num_runs):
-        #for run in tqdm(range(num_runs), desc="Generating Samples"):
+            # for run in tqdm(range(num_runs), desc="Generating Samples"):
             # Initialize a fresh noise sample for this run
             x_gen = torch.randn(sample_shape, device=self.device)
             # Concatenate the conditioning frame along the channel dimension.
@@ -222,31 +240,33 @@ class DiffusionModelTrainer(LightningModule):
             x_gen = torch.cat([x_gen, img], dim=1)
 
             # Reverse diffusion loop for this run
-            for t in self.scheduler.timesteps: 
+            for t in self.scheduler.timesteps:
                 # Create a tensor for the current timestep for all samples in the batch
-                t_tensor = torch.full((sample_shape[0],), t, device=self.device, dtype=torch.long)
-                
+                t_tensor = torch.full(
+                    (sample_shape[0],), t, device=self.device, dtype=torch.long
+                )
+
                 # Predict the noise residual using your model
                 model_output = self.model.forward(x_gen, t_tensor, y=y)
-                
+
                 # Update the sample using the scheduler’s step function.
                 # Here, we assume that only the first 3 channels of x_gen are updated.
-                step_output = self.scheduler.step(model_output, t, x_gen[:, :x.shape[1]])
+                step_output = self.scheduler.step(
+                    model_output, t, x_gen[:, : x.shape[1]]
+                )
                 x_gen = step_output.prev_sample
 
-                
                 # Re-attach the conditioning frame so that it remains part of x_gen.
                 x_gen = torch.cat([x_gen, img], dim=1)
 
             # After finishing the diffusion process for this run, update the conditioning frame.
             # We assume that the first 3 channels of x_gen represent the generated video frame.
-            img = x_gen[:, :x.shape[1]]
+            img = x_gen[:, : x.shape[1]]
             video.append(img)
-            #if self.model.autoencoder is not None:
-                #video.append(self.model.autoencoder.decode(x_gen))
-            #else:
-                #video.append(x_gen)
-    
+            # if self.model.autoencoder is not None:
+            # video.append(self.model.autoencoder.decode(x_gen))
+            # else:
+            # video.append(x_gen)
 
             # Optionally: Save or process the generated video for this run.
             # For example: save_video(x_gen[:, :3], run)
@@ -256,7 +276,11 @@ class DiffusionModelTrainer(LightningModule):
             generated_video = preprocess_and_format_video(video[i])
             if self.logger is not None:
                 self.logger.experiment.log(
-                    {f"val/generated_video_{i}": wandb.Video(generated_video, fps=4, format="gif")}
+                    {
+                        f"val/generated_video_{i}": wandb.Video(
+                            generated_video, fps=4, format="gif"
+                        )
+                    }
                 )
         ## ---------
         ## Also compute the diffusion loss on the batch
@@ -265,13 +289,16 @@ class DiffusionModelTrainer(LightningModule):
             noise = torch.randn_like(x)
             batch_size = x.shape[0]
             timesteps = torch.randint(
-                0, self.scheduler.config.num_train_timesteps, (batch_size,), device=x.device
+                0,
+                self.scheduler.config.num_train_timesteps,
+                (batch_size,),
+                device=x.device,
             ).long()
             x_noisy = self.scheduler.add_noise(x, noise, timesteps)
             x_noisy = torch.cat([x_noisy, img], dim=1)
             noise_pred = self.model.forward(x_noisy, timesteps, y=y)
             x_pred = self.scheduler.get_velocity(
-                sample=noise_pred, noise=x_noisy[:, :x.shape[1]], timesteps=timesteps
+                sample=noise_pred, noise=x_noisy[:, : x.shape[1]], timesteps=timesteps
             )
 
             loss = F.mse_loss(x_pred, x)
@@ -293,7 +320,7 @@ class DiffusionModelTrainer(LightningModule):
         loss = F.mse_loss(noise_pred, noise)
         self.test_loss.update(loss)
         self.log("test/loss", loss, on_step=False, on_epoch=True, prog_bar=True)
-    
+
     def configure_optimizers(self) -> Dict[str, Any]:
         """Choose what optimizers and learning-rate schedulers to use in your optimization.
         Normally you'd need one. But in the case of GANs or similar you might have multiple.
@@ -316,7 +343,6 @@ class DiffusionModelTrainer(LightningModule):
             }
         return {"optimizer": optimizer}
 
-
     def setup(self, stage: str) -> None:
         if self.compile_model and stage == "fit":
             self.model = torch.compile(self.model)
@@ -332,8 +358,17 @@ if __name__ == "__main__":
 
     from src.models.components.dit import DiT_S_8
     from src.models.components.autoencoder.simple_autoencoder import AutoEncoder
-    autoencoder = AutoEncoder(in_channels=3, latent_dim=4, hidden_size=64, downsampling_factor=4)
-    model = DiT_S_8(in_channels=8, input_size=16, out_channels=4, num_classes=10, autoencoder=autoencoder)
+
+    autoencoder = AutoEncoder(
+        in_channels=3, latent_dim=4, hidden_size=64, downsampling_factor=4
+    )
+    model = DiT_S_8(
+        in_channels=8,
+        input_size=16,
+        out_channels=4,
+        num_classes=10,
+        autoencoder=autoencoder,
+    )
     optimizer = torch.optim.Adam
 
     scheduler = DDPMScheduler(
@@ -359,24 +394,29 @@ if __name__ == "__main__":
         transform=None,
     )
 
-
     from torch.utils.data import DataLoader
 
     loader = DataLoader(dataset, batch_size=2, num_workers=8, shuffle=True)
     batch = next(iter(loader))
 
-    #loss = diffusion_trainer.training_step(batch, batch_idx=0)
+    # loss = diffusion_trainer.training_step(batch, batch_idx=0)
     val = diffusion_trainer.validation_step(batch, batch_idx=0)
     from lightning import Trainer
 
     trainer = Trainer(devices=1, num_sanity_val_steps=1, val_check_interval=1)
-    trainer.fit(diffusion_trainer, loader,)
+    trainer.fit(
+        diffusion_trainer,
+        loader,
+    )
 
     # Create a dummy video batch.
     # For example, batch_size=16, channels=1, frames=16, height=64, width=64.
     dummy_batch = {
         "video": torch.rand(16, 3, 64, 64) * 2 - 1,
-        "cond": {"img": torch.rand(16, 3, 64, 64) * 2 - 1, "y": torch.randint(0, 10, (16,))},
+        "cond": {
+            "img": torch.rand(16, 3, 64, 64) * 2 - 1,
+            "y": torch.randint(0, 10, (16,)),
+        },
     }  # values in [-1, 1]
 
     # Simulate one training step.

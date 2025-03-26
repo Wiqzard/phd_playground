@@ -41,9 +41,13 @@ class BasaltFrameDataset(Dataset):
         self.stride = max(1, seq_len - overlap)
 
         # We'll store a list of clips (video_folder, start_frame_idx)
-        self.clips: List[Tuple[str, int, int]] = []  # (video_folder, start_frame, total_frames)
+        self.clips: List[Tuple[str, int, int]] = (
+            []
+        )  # (video_folder, start_frame, total_frames)
         # Also store a parallel list of actions_file for each video_folder
-        self.video_actions_map: Dict[str, str] = {}  # "video_folder" -> "actions_path.json"
+        self.video_actions_map: Dict[str, str] = (
+            {}
+        )  # "video_folder" -> "actions_path.json"
 
         self._enumerate_clips()
 
@@ -56,7 +60,11 @@ class BasaltFrameDataset(Dataset):
                 continue
 
             # each subfolder in env_path is a video name
-            videos = [d for d in os.listdir(env_path) if os.path.isdir(os.path.join(env_path, d))]
+            videos = [
+                d
+                for d in os.listdir(env_path)
+                if os.path.isdir(os.path.join(env_path, d))
+            ]
             for vid_name in tqdm(videos):
                 vid_folder = os.path.join(env_path, vid_name)
                 frames_list = sorted(
@@ -102,7 +110,9 @@ class BasaltFrameDataset(Dataset):
         frames = []
         for i in range(self.seq_len):
             frame_idx = start + i
-            frame_path = os.path.join(vid_folder, f"frame_{frame_idx:06d}{self.image_ext}")
+            frame_path = os.path.join(
+                vid_folder, f"frame_{frame_idx:06d}{self.image_ext}"
+            )
             # load image
             img = Image.open(frame_path)
             img = img.convert("RGB")  # ensure 3 channels
@@ -116,16 +126,16 @@ class BasaltFrameDataset(Dataset):
         # safe self.clips as pickle
 
         # 3) Extract the corresponding actions
-        #clip_actions = all_actions[start : start + self.seq_len]
-        #clip_actions = [
+        # clip_actions = all_actions[start : start + self.seq_len]
+        # clip_actions = [
         #    {"x": action["mouse"]["x"],
         #     "y": action["mouse"]["y"]} for action in clip_actions]
 
-        #assert len(clip_actions) == self.seq_len, f"Expected {self.seq_len} actions, got {len(clip_actions)}"
+        # assert len(clip_actions) == self.seq_len, f"Expected {self.seq_len} actions, got {len(clip_actions)}"
 
         return {
             "video": video_tensor,
-        #    "actions": clip_actions,
+            #    "actions": clip_actions,
             "video_folder": vid_folder,
             "start_frame": start,
         }
@@ -163,7 +173,6 @@ class BasaltDataModule(LightningDataModule):
                 transforms.Resize((self.height, self.width)),
                 transforms.ToTensor(),
                 transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
-
             ]
         )
 
@@ -178,7 +187,7 @@ class BasaltDataModule(LightningDataModule):
     def setup(self, stage: Optional[str] = None) -> None:
         """Split the dataset into train, validation, and test sets."""
 
-        #self.full_dataset = BasaltFrameDataset(
+        # self.full_dataset = BasaltFrameDataset(
         #        root_dir=self.data_dir,
         #        seq_len=self.seq_len,
         #        overlap=self.overlap,
@@ -197,7 +206,9 @@ class BasaltDataModule(LightningDataModule):
             train_size = int(0.8 * len(full_dataset))
             val_size = len(full_dataset) - train_size
             self.dataset_train, self.dataset_val = random_split(
-                full_dataset, [train_size, val_size], generator=torch.Generator().manual_seed(42)
+                full_dataset,
+                [train_size, val_size],
+                generator=torch.Generator().manual_seed(42),
             )
 
         if stage == "test" or stage is None:
@@ -211,7 +222,7 @@ class BasaltDataModule(LightningDataModule):
 
     def train_dataloader(self) -> DataLoader:
         return DataLoader(
-            #self.full_dataset,
+            # self.full_dataset,
             self.dataset_train,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
@@ -221,13 +232,13 @@ class BasaltDataModule(LightningDataModule):
 
     def val_dataloader(self) -> DataLoader:
         return DataLoader(
-            #self.full_dataset,
+            # self.full_dataset,
             self.dataset_val,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
             shuffle=False,
-        ) 
+        )
 
     def test_dataloader(self) -> DataLoader:
         return DataLoader(
@@ -286,9 +297,11 @@ if __name__ == "__main__":
         ]
     )
 
-
     dataset = BasaltFrameDataset(
-        "/data/cvg/sebastian/minecraft_processed", seq_len=8, overlap=2, transform=transform
+        "/data/cvg/sebastian/minecraft_processed",
+        seq_len=8,
+        overlap=2,
+        transform=transform,
     )
     sample = dataset[0]
     print(sample["video"].shape, len(sample["actions"]))

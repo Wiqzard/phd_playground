@@ -23,15 +23,24 @@ from diffusers.models.attention_processor import (
     CogVideoXAttnProcessor2_0,
     FusedCogVideoXAttnProcessor2_0,
 )
-from diffusers.models.embeddings import TimestepEmbedding, Timesteps, get_3d_sincos_pos_embed
+from diffusers.models.embeddings import (
+    TimestepEmbedding,
+    Timesteps,
+    get_3d_sincos_pos_embed,
+)
 from diffusers.models.modeling_utils import ModelMixin
 from diffusers.models.normalization import AdaLayerNorm, CogVideoXLayerNormZero
-from diffusers.models.embeddings import TimestepEmbedding, Timesteps #CogVideoXPatchEmbed, 
+from diffusers.models.embeddings import (
+    TimestepEmbedding,
+    Timesteps,
+)  # CogVideoXPatchEmbed,
 from diffusers.models.embeddings import get_3d_rotary_pos_embed
-#from diffusers.models.cache_utils import CacheMixin
+
+# from diffusers.models.cache_utils import CacheMixin
 
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
+
 
 def prepare_rotary_positional_embeddings(
     height: int,
@@ -101,32 +110,47 @@ class CogVideoXPatchEmbed(nn.Module):
         if disable_text:
             max_text_seq_length = 1
         self.max_text_seq_length = max_text_seq_length
-            
 
         if patch_size_t is None:
             # CogVideoX 1.0 checkpoints
             self.proj = nn.Conv2d(
-                in_channels, embed_dim, kernel_size=(patch_size, patch_size), stride=patch_size, bias=bias
+                in_channels,
+                embed_dim,
+                kernel_size=(patch_size, patch_size),
+                stride=patch_size,
+                bias=bias,
             )
         else:
             # CogVideoX 1.5 checkpoints
-            self.proj = nn.Linear(in_channels * patch_size * patch_size * patch_size_t, embed_dim)
+            self.proj = nn.Linear(
+                in_channels * patch_size * patch_size * patch_size_t, embed_dim
+            )
 
         if not disable_text:
             self.text_proj = nn.Linear(text_embed_dim, embed_dim)
 
         if use_positional_embeddings or use_learned_positional_embeddings:
             persistent = use_learned_positional_embeddings
-            pos_embedding = self._get_positional_embeddings(sample_height, sample_width, sample_frames)
+            pos_embedding = self._get_positional_embeddings(
+                sample_height, sample_width, sample_frames
+            )
             self.register_buffer("pos_embedding", pos_embedding, persistent=persistent)
 
     def _get_positional_embeddings(
-        self, sample_height: int, sample_width: int, sample_frames: int, device: Optional[torch.device] = None
+        self,
+        sample_height: int,
+        sample_width: int,
+        sample_frames: int,
+        device: Optional[torch.device] = None,
     ) -> torch.Tensor:
         post_patch_height = sample_height // self.patch_size
         post_patch_width = sample_width // self.patch_size
-        post_time_compression_frames = (sample_frames - 1) // self.temporal_compression_ratio + 1
-        num_patches = post_patch_height * post_patch_width * post_time_compression_frames
+        post_time_compression_frames = (
+            sample_frames - 1
+        ) // self.temporal_compression_ratio + 1
+        num_patches = (
+            post_patch_height * post_patch_width * post_time_compression_frames
+        )
 
         pos_embedding = get_3d_sincos_pos_embed(
             self.embed_dim,
@@ -139,7 +163,10 @@ class CogVideoXPatchEmbed(nn.Module):
         )
         pos_embedding = pos_embedding.flatten(0, 1)
         joint_pos_embedding = pos_embedding.new_zeros(
-            1, self.max_text_seq_length + num_patches, self.embed_dim, requires_grad=False
+            1,
+            self.max_text_seq_length + num_patches,
+            self.embed_dim,
+            requires_grad=False,
         )
         joint_pos_embedding.data[:, self.max_text_seq_length :].copy_(pos_embedding)
 
@@ -156,25 +183,42 @@ class CogVideoXPatchEmbed(nn.Module):
         if not self.disable_text:
             text_embeds = self.text_proj(text_embeds)
         if text_embeds is None:
-            text_embeds = torch.zeros(image_embeds.shape[0], 1, self.embed_dim, device=image_embeds.device)
+            text_embeds = torch.zeros(
+                image_embeds.shape[0], 1, self.embed_dim, device=image_embeds.device
+            )
 
         batch_size, num_frames, channels, height, width = image_embeds.shape
 
         if self.patch_size_t is None:
             image_embeds = image_embeds.reshape(-1, channels, height, width)
             image_embeds = self.proj(image_embeds)
-            image_embeds = image_embeds.view(batch_size, num_frames, *image_embeds.shape[1:])
-            image_embeds = image_embeds.flatten(3).transpose(2, 3)  # [batch, num_frames, height x width, channels]
-            image_embeds = image_embeds.flatten(1, 2)  # [batch, num_frames x height x width, channels]
+            image_embeds = image_embeds.view(
+                batch_size, num_frames, *image_embeds.shape[1:]
+            )
+            image_embeds = image_embeds.flatten(3).transpose(
+                2, 3
+            )  # [batch, num_frames, height x width, channels]
+            image_embeds = image_embeds.flatten(
+                1, 2
+            )  # [batch, num_frames x height x width, channels]
         else:
             p = self.patch_size
             p_t = self.patch_size_t
 
             image_embeds = image_embeds.permute(0, 1, 3, 4, 2)
             image_embeds = image_embeds.reshape(
-                batch_size, num_frames // p_t, p_t, height // p, p, width // p, p, channels
+                batch_size,
+                num_frames // p_t,
+                p_t,
+                height // p,
+                p,
+                width // p,
+                p,
+                channels,
             )
-            image_embeds = image_embeds.permute(0, 1, 3, 5, 7, 2, 4, 6).flatten(4, 7).flatten(1, 3)
+            image_embeds = (
+                image_embeds.permute(0, 1, 3, 5, 7, 2, 4, 6).flatten(4, 7).flatten(1, 3)
+            )
             image_embeds = self.proj(image_embeds)
 
         embeds = torch.cat(
@@ -182,13 +226,17 @@ class CogVideoXPatchEmbed(nn.Module):
         ).contiguous()  # [batch, seq_length + num_frames x height x width, channels]
 
         if self.use_positional_embeddings or self.use_learned_positional_embeddings:
-            if self.use_learned_positional_embeddings and (self.sample_width != width or self.sample_height != height):
+            if self.use_learned_positional_embeddings and (
+                self.sample_width != width or self.sample_height != height
+            ):
                 raise ValueError(
                     "It is currently not possible to generate videos at a different resolution that the defaults. This should only be the case with 'THUDM/CogVideoX-5b-I2V'."
                     "If you think this is incorrect, please open an issue at https://github.com/huggingface/diffusers/issues."
                 )
 
-            pre_time_compression_frames = (num_frames - 1) * self.temporal_compression_ratio + 1
+            pre_time_compression_frames = (
+                num_frames - 1
+            ) * self.temporal_compression_ratio + 1
 
             if (
                 self.sample_height != height
@@ -205,6 +253,7 @@ class CogVideoXPatchEmbed(nn.Module):
             embeds = embeds + pos_embedding
 
         return embeds
+
 
 @maybe_allow_in_graph
 class VideoTransformerBlock(nn.Module):
@@ -260,7 +309,9 @@ class VideoTransformerBlock(nn.Module):
         super().__init__()
 
         # 1. Self Attention
-        self.norm1 = CogVideoXLayerNormZero(time_embed_dim, dim, norm_elementwise_affine, norm_eps, bias=True)
+        self.norm1 = CogVideoXLayerNormZero(
+            time_embed_dim, dim, norm_elementwise_affine, norm_eps, bias=True
+        )
 
         self.attn1 = Attention(
             query_dim=dim,
@@ -274,7 +325,9 @@ class VideoTransformerBlock(nn.Module):
         )
 
         # 2. Feed Forward
-        self.norm2 = CogVideoXLayerNormZero(time_embed_dim, dim, norm_elementwise_affine, norm_eps, bias=True)
+        self.norm2 = CogVideoXLayerNormZero(
+            time_embed_dim, dim, norm_elementwise_affine, norm_eps, bias=True
+        )
 
         self.ff = FeedForward(
             dim,
@@ -297,8 +350,8 @@ class VideoTransformerBlock(nn.Module):
         attention_kwargs = attention_kwargs or {}
 
         # norm & modulate
-        norm_hidden_states, norm_encoder_hidden_states, gate_msa, enc_gate_msa = self.norm1(
-            hidden_states, encoder_hidden_states, temb
+        norm_hidden_states, norm_encoder_hidden_states, gate_msa, enc_gate_msa = (
+            self.norm1(hidden_states, encoder_hidden_states, temb)
         )
 
         # attention
@@ -310,24 +363,30 @@ class VideoTransformerBlock(nn.Module):
         )
 
         hidden_states = hidden_states + gate_msa * attn_hidden_states
-        encoder_hidden_states = encoder_hidden_states + enc_gate_msa * attn_encoder_hidden_states
+        encoder_hidden_states = (
+            encoder_hidden_states + enc_gate_msa * attn_encoder_hidden_states
+        )
 
         # norm & modulate
-        norm_hidden_states, norm_encoder_hidden_states, gate_ff, enc_gate_ff = self.norm2(
-            hidden_states, encoder_hidden_states, temb
+        norm_hidden_states, norm_encoder_hidden_states, gate_ff, enc_gate_ff = (
+            self.norm2(hidden_states, encoder_hidden_states, temb)
         )
 
         # feed-forward
-        norm_hidden_states = torch.cat([norm_encoder_hidden_states, norm_hidden_states], dim=1)
+        norm_hidden_states = torch.cat(
+            [norm_encoder_hidden_states, norm_hidden_states], dim=1
+        )
         ff_output = self.ff(norm_hidden_states)
 
         hidden_states = hidden_states + gate_ff * ff_output[:, text_seq_length:]
-        encoder_hidden_states = encoder_hidden_states + enc_gate_ff * ff_output[:, :text_seq_length]
+        encoder_hidden_states = (
+            encoder_hidden_states + enc_gate_ff * ff_output[:, :text_seq_length]
+        )
 
         return hidden_states, encoder_hidden_states
 
 
-class VideoTransformer(ModelMixin, ConfigMixin, PeftAdapterMixin): #, CacheMixin):
+class VideoTransformer(ModelMixin, ConfigMixin, PeftAdapterMixin):  # , CacheMixin):
     """
     Parameters:
         num_attention_heads (`int`, defaults to `30`):
@@ -451,7 +510,9 @@ class VideoTransformer(ModelMixin, ConfigMixin, PeftAdapterMixin): #, CacheMixin
         # 2. Time embeddings and ofs embedding(Only CogVideoX1.5-5B I2V have)
 
         self.time_proj = Timesteps(inner_dim, flip_sin_to_cos, freq_shift)
-        self.time_embedding = TimestepEmbedding(inner_dim, time_embed_dim, timestep_activation_fn)
+        self.time_embedding = TimestepEmbedding(
+            inner_dim, time_embed_dim, timestep_activation_fn
+        )
 
         self.ofs_proj = None
         self.ofs_embedding = None
@@ -511,7 +572,11 @@ class VideoTransformer(ModelMixin, ConfigMixin, PeftAdapterMixin): #, CacheMixin
         # set recursively
         processors = {}
 
-        def fn_recursive_add_processors(name: str, module: torch.nn.Module, processors: Dict[str, AttentionProcessor]):
+        def fn_recursive_add_processors(
+            name: str,
+            module: torch.nn.Module,
+            processors: Dict[str, AttentionProcessor],
+        ):
             if hasattr(module, "get_processor"):
                 processors[f"{name}.processor"] = module.get_processor()
 
@@ -526,7 +591,9 @@ class VideoTransformer(ModelMixin, ConfigMixin, PeftAdapterMixin): #, CacheMixin
         return processors
 
     # Copied from diffusers.models.unets.unet_2d_condition.UNet2DConditionModel.set_attn_processor
-    def set_attn_processor(self, processor: Union[AttentionProcessor, Dict[str, AttentionProcessor]]):
+    def set_attn_processor(
+        self, processor: Union[AttentionProcessor, Dict[str, AttentionProcessor]]
+    ):
         r"""
         Sets the attention processor to use to compute attention.
 
@@ -576,7 +643,9 @@ class VideoTransformer(ModelMixin, ConfigMixin, PeftAdapterMixin): #, CacheMixin
 
         for _, attn_processor in self.attn_processors.items():
             if "Added" in str(attn_processor.__class__.__name__):
-                raise ValueError("`fuse_qkv_projections()` is not supported for models having added KV projections.")
+                raise ValueError(
+                    "`fuse_qkv_projections()` is not supported for models having added KV projections."
+                )
 
         self.original_attn_processors = self.attn_processors
 
@@ -621,7 +690,10 @@ class VideoTransformer(ModelMixin, ConfigMixin, PeftAdapterMixin): #, CacheMixin
             # weight the lora layers by setting `lora_scale` for each PEFT layer
             scale_lora_layers(self, lora_scale)
         else:
-            if attention_kwargs is not None and attention_kwargs.get("scale", None) is not None:
+            if (
+                attention_kwargs is not None
+                and attention_kwargs.get("scale", None) is not None
+            ):
                 logger.warning(
                     "Passing `scale` via `attention_kwargs` when not using the PEFT backend is ineffective."
                 )
@@ -658,13 +730,15 @@ class VideoTransformer(ModelMixin, ConfigMixin, PeftAdapterMixin): #, CacheMixin
         # 3. Transformer blocks
         for i, block in enumerate(self.transformer_blocks):
             if torch.is_grad_enabled() and self.gradient_checkpointing:
-                hidden_states, encoder_hidden_states = self._gradient_checkpointing_func(
-                    block,
-                    hidden_states,
-                    encoder_hidden_states,
-                    emb,
-                    image_rotary_emb,
-                    attention_kwargs,
+                hidden_states, encoder_hidden_states = (
+                    self._gradient_checkpointing_func(
+                        block,
+                        hidden_states,
+                        encoder_hidden_states,
+                        emb,
+                        image_rotary_emb,
+                        attention_kwargs,
+                    )
                 )
             else:
                 hidden_states, encoder_hidden_states = block(
@@ -686,13 +760,27 @@ class VideoTransformer(ModelMixin, ConfigMixin, PeftAdapterMixin): #, CacheMixin
         p_t = self.config.patch_size_t
 
         if p_t is None:
-            output = hidden_states.reshape(batch_size, num_frames, height // p, width // p, -1, p, p)
+            output = hidden_states.reshape(
+                batch_size, num_frames, height // p, width // p, -1, p, p
+            )
             output = output.permute(0, 1, 4, 2, 5, 3, 6).flatten(5, 6).flatten(3, 4)
         else:
             output = hidden_states.reshape(
-                batch_size, (num_frames + p_t - 1) // p_t, height // p, width // p, -1, p_t, p, p
+                batch_size,
+                (num_frames + p_t - 1) // p_t,
+                height // p,
+                width // p,
+                -1,
+                p_t,
+                p,
+                p,
             )
-            output = output.permute(0, 1, 5, 4, 2, 6, 3, 7).flatten(6, 7).flatten(4, 5).flatten(1, 2)
+            output = (
+                output.permute(0, 1, 5, 4, 2, 6, 3, 7)
+                .flatten(6, 7)
+                .flatten(4, 5)
+                .flatten(1, 2)
+            )
 
         if USE_PEFT_BACKEND:
             # remove `lora_scale` from each PEFT layer
@@ -700,23 +788,24 @@ class VideoTransformer(ModelMixin, ConfigMixin, PeftAdapterMixin): #, CacheMixin
 
         return (output,)
 
+
 config_50m = {
     "activation_fn": "gelu-approximate",
     "attention_bias": True,
-    "attention_head_dim": 48, #64,
+    "attention_head_dim": 48,  # 64,
     "num_attention_heads": 8,
-    "num_layers": 12,         
+    "num_layers": 12,
     "dropout": 0.0,
     "flip_sin_to_cos": True,
     "freq_shift": 0,
     "use_rotary_positional_embeddings": False,
     "in_channels": 32,
     "out_channels": 16,
-    "patch_size": 2, #2,
-    "patch_size_t": 2, #None, #2
+    "patch_size": 2,  # 2,
+    "patch_size_t": 2,  # None, #2
     "max_text_seq_length": 226,
-    "text_embed_dim": 8,     
-    "time_embed_dim": 256,     
+    "text_embed_dim": 8,
+    "time_embed_dim": 256,
     "norm_elementwise_affine": True,
     "norm_eps": 1e-5,
     "sample_frames": 49,
@@ -726,84 +815,86 @@ config_50m = {
     "temporal_compression_ratio": 4,
     "temporal_interpolation_scale": 1.0,
     "timestep_activation_fn": "silu",
-    "disable_text": True 
+    "disable_text": True,
 }
 
 config_5b = {
-  "activation_fn": "gelu-approximate",
-  "attention_bias": True,
-  "attention_head_dim": 64,
-  "dropout": 0.0,
-  "flip_sin_to_cos": True,
-  "freq_shift": 0,
-  "in_channels": 32,
-  "max_text_seq_length": 226,
-  "norm_elementwise_affine": True,
-  "norm_eps": 1e-05,
-  "num_attention_heads": 48,
-  "num_layers": 42,
-  "ofs_embed_dim": 512,
-  "out_channels": 16,
-  "patch_bias": False,
-  "patch_size": 2,
-  "patch_size_t": 2,
-  "sample_frames": 81,
-  "sample_height": 300,
-  "sample_width": 300,
-  "spatial_interpolation_scale": 1.875,
-  "temporal_compression_ratio": 4,
-  "temporal_interpolation_scale": 1.0,
-  "text_embed_dim": 4096,
-  "time_embed_dim": 512,
-  "timestep_activation_fn": "silu",
-  "use_learned_positional_embeddings": False,
-  "use_rotary_positional_embeddings": True
+    "activation_fn": "gelu-approximate",
+    "attention_bias": True,
+    "attention_head_dim": 64,
+    "dropout": 0.0,
+    "flip_sin_to_cos": True,
+    "freq_shift": 0,
+    "in_channels": 32,
+    "max_text_seq_length": 226,
+    "norm_elementwise_affine": True,
+    "norm_eps": 1e-05,
+    "num_attention_heads": 48,
+    "num_layers": 42,
+    "ofs_embed_dim": 512,
+    "out_channels": 16,
+    "patch_bias": False,
+    "patch_size": 2,
+    "patch_size_t": 2,
+    "sample_frames": 81,
+    "sample_height": 300,
+    "sample_width": 300,
+    "spatial_interpolation_scale": 1.875,
+    "temporal_compression_ratio": 4,
+    "temporal_interpolation_scale": 1.0,
+    "text_embed_dim": 4096,
+    "time_embed_dim": 512,
+    "timestep_activation_fn": "silu",
+    "use_learned_positional_embeddings": False,
+    "use_rotary_positional_embeddings": True,
 }
 
 config_20m = {
-  "activation_fn": "gelu-approximate",
-  "attention_bias": True,
-  "attention_head_dim": 48, #64,
-  "dropout": 0.0,
-  "flip_sin_to_cos": True,
-  "freq_shift": 0,
-  "in_channels": 32,
-  "max_text_seq_length": 1,
-  "norm_elementwise_affine": True,
-  "norm_eps": 1e-05,
-  "num_attention_heads": 8,
-  "num_layers": 12,
-  "ofs_embed_dim": None,
-  "out_channels": 6, 
-  "patch_bias": False,
-  "patch_size": 2,
-  "patch_size_t": 2,
-  "sample_frames": 81,
-  "sample_height": 64, #300,
-  "sample_width": 64, #300,
-  "spatial_interpolation_scale": 1.875,
-  "temporal_compression_ratio": 4,
-  "temporal_interpolation_scale": 1.0,
-  "text_embed_dim": 8,
-  "time_embed_dim": 512,
-  "timestep_activation_fn": "silu",
-  "use_learned_positional_embeddings": False,
-  "use_rotary_positional_embeddings": True,
-  "disable_text": True
+    "activation_fn": "gelu-approximate",
+    "attention_bias": True,
+    "attention_head_dim": 48,  # 64,
+    "dropout": 0.0,
+    "flip_sin_to_cos": True,
+    "freq_shift": 0,
+    "in_channels": 32,
+    "max_text_seq_length": 1,
+    "norm_elementwise_affine": True,
+    "norm_eps": 1e-05,
+    "num_attention_heads": 8,
+    "num_layers": 12,
+    "ofs_embed_dim": None,
+    "out_channels": 6,
+    "patch_bias": False,
+    "patch_size": 2,
+    "patch_size_t": 2,
+    "sample_frames": 81,
+    "sample_height": 64,  # 300,
+    "sample_width": 64,  # 300,
+    "spatial_interpolation_scale": 1.875,
+    "temporal_compression_ratio": 4,
+    "temporal_interpolation_scale": 1.0,
+    "text_embed_dim": 8,
+    "time_embed_dim": 512,
+    "timestep_activation_fn": "silu",
+    "use_learned_positional_embeddings": False,
+    "use_rotary_positional_embeddings": True,
+    "disable_text": True,
 }
-
 
 
 if __name__ == "__main__":
     model = VideoTransformer(**config_20m).cuda()
     # print num of parameters
     print(sum(p.numel() for p in model.parameters()))
-    #B, T, C, H, W and divisible by 8
-    #hidden_states = torch.randn(2, 49, 32, 60, 90)
+    # B, T, C, H, W and divisible by 8
+    # hidden_states = torch.randn(2, 49, 32, 60, 90)
     hidden_states = torch.randn(2, 12, 32, 20, 30).cuda()
-    encoder_hidden_states = None #torch.randn(2, 226, 768).cuda()
+    encoder_hidden_states = None  # torch.randn(2, 226, 768).cuda()
     timestep = torch.randint(0, 100, (2,)).cuda()
-    freqs_cis = prepare_rotary_positional_embeddings(20, 30, 12, model.config, 1, torch.device("cuda"))
-    output = model(hidden_states, encoder_hidden_states, timestep, image_rotary_emb=freqs_cis)
+    freqs_cis = prepare_rotary_positional_embeddings(
+        20, 30, 12, model.config, 1, torch.device("cuda")
+    )
+    output = model(
+        hidden_states, encoder_hidden_states, timestep, image_rotary_emb=freqs_cis
+    )
     print(0)
-

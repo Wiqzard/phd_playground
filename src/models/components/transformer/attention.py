@@ -53,7 +53,9 @@ class Attention(nn.Module):
             q_xf = q.transpose(1, 2).contiguous()
             k_xf = k.transpose(1, 2).contiguous()
             v_xf = v.transpose(1, 2).contiguous()
-            x = xformers.ops.memory_efficient_attention(q_xf, k_xf, v_xf).reshape(B, N, C)
+            x = xformers.ops.memory_efficient_attention(q_xf, k_xf, v_xf).reshape(
+                B, N, C
+            )
 
         elif self.attention_mode == "flash":
             # cause loss nan while using with amp

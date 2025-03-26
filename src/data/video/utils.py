@@ -13,6 +13,7 @@ from fractions import Fraction
 
 try:
     import av
+
     av.logging.set_level(av.logging.ERROR)
     if not hasattr(av.video.frame.VideoFrame, "pict_type"):
         av = ImportError(
@@ -37,6 +38,7 @@ from torchvision.io.video import (
     _read_from_stream,
 )
 
+
 def random_bool(p: float) -> bool:
     """
     Return True with probability p
@@ -44,6 +46,7 @@ def random_bool(p: float) -> bool:
     if p == 0:
         return False
     return random.random() < p
+
 
 def read_video(
     filename: str,
@@ -120,6 +123,8 @@ def read_video(
         vframes = vframes.permute(0, 3, 1, 2)
 
     return vframes
+
+
 class VideoTransform:
     """
     Adapted from pixelSplat

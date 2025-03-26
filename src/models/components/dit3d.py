@@ -37,7 +37,9 @@ class DiT3D(DiT):
         bs, t, c, h, w = x.shape
 
         x = rearrange(x, "b t c h w -> (b t) c h w")
-        x = self.x_embedder(x) + self.pos_embed  # (N*T , S, D), where S = H * W / patch_size ** 2
+        x = (
+            self.x_embedder(x) + self.pos_embed
+        )  # (N*T , S, D), where S = H * W / patch_size ** 2
         x = rearrange(x, "(b t) p c -> b (t p) c", b=bs)  #
         t_emb = self.t_embedder(timestep)  # (N, D)
 
@@ -46,7 +48,6 @@ class DiT3D(DiT):
             c = t_emb + y  # (N, D)
         else:
             c = t_emb
-        
 
         for block in self.blocks:
             x = block(x, c)  # (N, T, D)
@@ -58,4 +59,3 @@ class DiT3D(DiT):
         x = rearrange(x, "(b t) h w c -> b t c h w", b=bs)  # (B, T, C, H, W)
 
         return x
-

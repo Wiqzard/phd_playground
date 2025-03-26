@@ -12,14 +12,29 @@ from titans.titans_pytorch.neural_memory import NeuralMemory
 from titans.titans_pytorch.memory_models import MemoryMLP
 
 # from titans.titans_pytorch.ttt_custom import Block
-from titans.titans_pytorch.ttt_custom import TTTConfig, TTTLinear, TTTMLP, Block, TTTCache
+from titans.titans_pytorch.ttt_custom import (
+    TTTConfig,
+    TTTLinear,
+    TTTMLP,
+    Block,
+    TTTCache,
+)
 
 # from src.models.components.dit import DiT, modulate
 from src.models.components.transformer.dit import DiT, modulate
 
 from src.models.components.transformer.dit3d_base import DiT3D, BaseBackbone
-from src.models.components.transformer.ditv2 import DiTBase, DiTBlock, DITFinalLayer, RotaryEmbedding3D, Variant, PosEmb, SinusoidalPositionalEmbedding
+from src.models.components.transformer.ditv2 import (
+    DiTBase,
+    DiTBlock,
+    DITFinalLayer,
+    RotaryEmbedding3D,
+    Variant,
+    PosEmb,
+    SinusoidalPositionalEmbedding,
+)
 from src.models.components.transformer.ditv2_blocks import AdaLayerNormZero
+
 
 def exists(v):
     return v is not None
@@ -32,9 +47,10 @@ def default(v, d):
 class DummyConfig:
     def __init__(self, **kwargs):
         self.__dict__.update(kwargs)
-        
+
     def get(self, key, default=None):
         return self.__dict__.get(key, default)
+
 
 class MemoryBlock(nn.Module):
     def __init__(self, hidden_size, depth_memory=2):
@@ -51,16 +67,17 @@ class MemoryBlock(nn.Module):
             use_accelerated_scan=False,
             default_step_transform_max_lr=1e-1,
         )
-        self.modulation = nn.Sequential(nn.SiLU(), nn.Linear(hidden_size, 3 * hidden_size, bias=True))
+        self.modulation = nn.Sequential(
+            nn.SiLU(), nn.Linear(hidden_size, 3 * hidden_size, bias=True)
+        )
         rank = 8
         self.lora_A = nn.Parameter(torch.randn(hidden_size, rank))
         self.lora_B = nn.Parameter(torch.randn(hidden_size, rank))
 
-
         # self.layer_norm = nn.LayerNorm(hidden_size)
 
     def forward(self, x, c, state=None):
-        
+
         retrieved, memory_state, surprises = self.memory_layer(x, state=state)
         shift, scale, gate = self.modulation(c).chunk(3, dim=-1)
         x = x + retrieved * gate.unsqueeze(1)
@@ -103,7 +120,6 @@ class DiT3D(DiT):
         )
         self.config = DummyConfig(model_type="DiT3D")
 
-
         memory_slots = [1, 3, 5, 9]
         self.memory_layers = torch.nn.ModuleList([])
         for i in range(depth):
@@ -123,7 +139,8 @@ class DiT3D(DiT):
                             default_step_transform_max_lr=1e-1,
                         ),
                         nn.Sequential(
-                            nn.SiLU(), nn.Linear(hidden_size, 3 * hidden_size, bias=True)
+                            nn.SiLU(),
+                            nn.Linear(hidden_size, 3 * hidden_size, bias=True),
                         ),
                         # nn.LayerNorm(hidden_size),  # intentionally commented out?
                     ]
@@ -134,14 +151,16 @@ class DiT3D(DiT):
 
         # Corrected loop: Zero-out modulation layers' parameters for non-Identity layers
         for layer in self.memory_layers:
-           if isinstance(layer, torch.nn.ModuleList):
-               modulation = layer[1]  # This is your nn.Sequential(SiLU, Linear)
-               nn.init.constant_(modulation[-1].weight, 0.0)
-               nn.init.constant_(modulation[-1].bias, 0.0)
+            if isinstance(layer, torch.nn.ModuleList):
+                modulation = layer[1]  # This is your nn.Sequential(SiLU, Linear)
+                nn.init.constant_(modulation[-1].weight, 0.0)
+                nn.init.constant_(modulation[-1].bias, 0.0)
 
-    def forward(self, x, timestep, cond=None, cache_params=None, use_cache=True, run=0):# memory_states=None, return_memory=False):
+    def forward(
+        self, x, timestep, cond=None, cache_params=None, use_cache=True, run=0
+    ):  # memory_states=None, return_memory=False):
         memory_states = default(cache_params, [])
-        return_memory = True #exists(cache_params)
+        return_memory = True  # exists(cache_params)
 
         bs, t, c, h, w = x.shape
 
@@ -165,10 +184,10 @@ class DiT3D(DiT):
         for j, (block, memory_layer) in enumerate(zip(self.blocks, self.memory_layers)):
             x = block(x, c)  # (N, T, D)
 
-            #if True: #not isinstance(memory_layer, nn.Identity):
+            # if True: #not isinstance(memory_layer, nn.Identity):
             if not isinstance(memory_layer, nn.Identity):
                 memory_layer, modulation = memory_layer
-                #memory_layer = memory_layer[0]
+                # memory_layer = memory_layer[0]
                 # input memory_state and overwriting the output is questionable
                 retrieved, memory_state, surprises = memory_layer(
                     x, state=next(neural_mem_caches, None), return_surprises=True
@@ -178,8 +197,10 @@ class DiT3D(DiT):
                     print("retrieved has nan")
                 next_neural_mem_caches.append(memory_state)
                 shift, scale, gate = modulation(c).chunk(3, dim=-1)
-                x = x + retrieved * gate.unsqueeze(1) #* modulate(retrieved, shift, scale)
-                #x = x + retrieved  # gate.unsqueeze(1) * modulate(retrieved, shift, scale)
+                x = x + retrieved * gate.unsqueeze(
+                    1
+                )  # * modulate(retrieved, shift, scale)
+                # x = x + retrieved  # gate.unsqueeze(1) * modulate(retrieved, shift, scale)
 
         x = self.final_layer(x, c)  # (N, T, patch_size ** 2 * out_channels)
 
@@ -189,7 +210,7 @@ class DiT3D(DiT):
         x = rearrange(x, "(b t) c h w -> b t c h w", b=bs)  # (B, T, C, H, W)
         # x = rearrange(x, "(b t) h w c -> b t c h w", b=bs)  # (B, T, C, H, W)
         if return_memory:
-            return x, next_neural_mem_caches #, surprises
+            return x, next_neural_mem_caches  # , surprises
 
         return x
 
@@ -215,7 +236,7 @@ class MemoryDiT3D(BaseBackbone):
         chunk_size: int = 16,
         batch_size: int = 16,
         depth_memory: int = 2,
-        memory_layer_indices: list = None, #[1, 3, 5, 9],
+        memory_layer_indices: list = None,  # [1, 3, 5, 9],
         momentum: bool = True,
     ):
 
@@ -236,7 +257,7 @@ class MemoryDiT3D(BaseBackbone):
         channels, resolution, *_ = x_shape
         self.cat_conditioning = cat_conditioning
         if cat_conditioning:
-            channels  = channels * 2
+            channels = channels * 2
         assert (
             resolution % self.patch_size == 0
         ), "Resolution must be divisible by patch size."
@@ -252,11 +273,10 @@ class MemoryDiT3D(BaseBackbone):
             bias=True,
         )
 
-
         self._check_args(self.num_patches, variant, pos_emb_type)
         self.learn_sigma = learn_sigma
         self.out_channels = out_channels * (2 if learn_sigma else 1)
-        self.max_temporal_length = max_tokens 
+        self.max_temporal_length = max_tokens
         self.max_tokens = self.max_temporal_length * (self.num_patches or 1)
         self.hidden_size = hidden_size
         self.depth = depth
@@ -320,9 +340,9 @@ class MemoryDiT3D(BaseBackbone):
             ]
         )
 
-        #assert (
-        #    max(memory_layer_indices) < depth  
-        #), f"Memory slots must be less than the depth of the model ({depth}) but got {memory_slots}"
+        # assert (
+        #    max(memory_layer_indices) < depth
+        # ), f"Memory slots must be less than the depth of the model ({depth}) but got {memory_slots}"
 
         self.memory_layer_indices = memory_layer_indices
         self.memory_layers = torch.nn.ModuleList([])
@@ -341,7 +361,7 @@ class MemoryDiT3D(BaseBackbone):
                             default_step_transform_max_lr=1e-1,
                             max_grad_norm=1,
                         ),
-                        AdaLayerNormZero(hidden_size)
+                        AdaLayerNormZero(hidden_size),
                     ]
                 )
                 self.memory_layers.append(memory_layer)
@@ -403,7 +423,9 @@ class MemoryDiT3D(BaseBackbone):
             return checkpoint(module, *args, use_reentrant=False)
         return module(*args)
 
-    def _dit_forward(self, x: torch.Tensor, c: torch.Tensor, cache_params=None) -> torch.Tensor:
+    def _dit_forward(
+        self, x: torch.Tensor, c: torch.Tensor, cache_params=None
+    ) -> torch.Tensor:
         memory_states = default(cache_params, [])
         aux_output = None
 
@@ -429,7 +451,6 @@ class MemoryDiT3D(BaseBackbone):
                 return x
 
             x = add_pos_emb(x, batch_size)
-
 
         neural_mem_caches = iter(default(memory_states, []))
         next_neural_mem_caches = []
@@ -522,7 +543,9 @@ class MemoryDiT3D(BaseBackbone):
         emb = repeat(emb, "b t c -> b (t p) c", p=self.num_patches)
 
         # Pass to DiTBase
-        x, neural_memory_cache, aux_output = self._dit_forward(x, emb, neural_memory_cache)  # (B, N, C)
+        x, neural_memory_cache, aux_output = self._dit_forward(
+            x, emb, neural_memory_cache
+        )  # (B, N, C)
 
         # Unpatchify
         x = self.unpatchify(
@@ -602,7 +625,14 @@ class DiT3DTTT(DiT):
         #        nn.init.constant_(modulation[-1].bias, 0.0)
 
     def forward(
-        self, x, timestep, cond=None, position_ids=None, cache_params=None, use_cache=False, run=1
+        self,
+        x,
+        timestep,
+        cond=None,
+        position_ids=None,
+        cache_params=None,
+        use_cache=False,
+        run=1,
     ):
         bs, t, c, h, w = x.shape
 
@@ -615,7 +645,7 @@ class DiT3DTTT(DiT):
         # -----------------------
         # -----------------------
         # -----------------------
-        #x = x + self.pos_embed[:, :num_patches]
+        # x = x + self.pos_embed[:, :num_patches]
 
         t_emb = self.t_embedder(timestep)  # (N, D)
 
@@ -632,7 +662,10 @@ class DiT3DTTT(DiT):
 
         if position_ids is None:
             position_ids = torch.arange(
-                run * num_patches, (run + 1) * num_patches, dtype=torch.long, device=x.device
+                run * num_patches,
+                (run + 1) * num_patches,
+                dtype=torch.long,
+                device=x.device,
             ).unsqueeze(0)
 
         attention_mask = torch.ones_like(position_ids)
@@ -646,10 +679,10 @@ class DiT3DTTT(DiT):
         # -----------------------
         # -----------------------
         # -----------------------
-        #print(cache_params.ttt_params_dict["W1_states"][1][:2,:5,0,0])
+        # print(cache_params.ttt_params_dict["W1_states"][1][:2,:5,0,0])
 
         for j, (block, memory_layer) in enumerate(zip(self.blocks, self.layers)):
-            #x = block(x, c)  # (N, T, D)
+            # x = block(x, c)  # (N, T, D)
             if not isinstance(memory_layer, nn.Identity):
                 # memory_layer# , modulation= memory_layer
                 # input memory_state and overwriting the output is questionable
@@ -666,7 +699,7 @@ class DiT3DTTT(DiT):
                 # shift, scale, gate = modulation(c).chunk(3, dim=-1)
                 # x = x + retrieved #gate.unsqueeze(1) * modulate(retrieved, shift, scale)
 
-        #print(cache_params.ttt_params_dict["W1_states"][1][:2,:5,0,0])
+        # print(cache_params.ttt_params_dict["W1_states"][1][:2,:5,0,0])
         x = self.final_layer(x, c)  # (N, T, patch_size ** 2 * out_channels)
 
         x = self.unpatchify(
@@ -682,7 +715,9 @@ class DiT3DTTT(DiT):
 
 
 if __name__ == "__main__":
-    model = DiT3DTTT(depth=12, hidden_size=768, patch_size=8, num_heads=12, max_frames=16).cuda()
+    model = DiT3DTTT(
+        depth=12, hidden_size=768, patch_size=8, num_heads=12, max_frames=16
+    ).cuda()
     # model = DiT3D(depth=12, hidden_size=768, patch_size=8, num_heads=12, max_frames=16).cuda()
     # print number of parameters
     print(sum(p.numel() for p in model.parameters() if p.requires_grad))

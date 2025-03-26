@@ -2,6 +2,7 @@ import torch
 
 from titans.titans_pytorch.ttt_custom import TTTConfig, Block, TTTModel, TTTMoELinear
 
+
 def quick_check_ttt_mlp():
     """
     1) Constructs a single Block that uses TTTMLP internally.
@@ -24,11 +25,11 @@ def quick_check_ttt_mlp():
 
     # Forward pass; no position_ids / no caching
     position_ids = torch.arange(
-        0, hidden_states.shape[1], 
-        dtype=torch.long, 
-        device=hidden_states.device
+        0, hidden_states.shape[1], dtype=torch.long, device=hidden_states.device
     ).unsqueeze(0)
-    out = test_block(hidden_states, attention_mask=None, position_ids=position_ids, cache_params=None)
+    out = test_block(
+        hidden_states, attention_mask=None, position_ids=position_ids, cache_params=None
+    )
     print("[Block with TTTMLP] Output shape:", out.shape)
     # Should be [batch_size, seq_len, hidden_size]
 
@@ -53,23 +54,26 @@ def quick_check_ttt_model():
     optimizer.zero_grad()
 
     # Random input_ids
-    input_ids = torch.randint(0, config.vocab_size, (2, 128))  # [batch_size=2, seq_len=5]
+    input_ids = torch.randint(
+        0, config.vocab_size, (2, 128)
+    )  # [batch_size=2, seq_len=5]
     outputs = model(input_ids, use_cache=True)
 
     loss = outputs.last_hidden_state.mean()
     loss.backward()
-    
+
     # Optimizer step
     optimizer.step()
-
 
     print("[TTTModel] Last hidden state shape:", outputs.last_hidden_state.shape)
     # If caching is on, you can also see that outputs.cache_params exists:
     if outputs.cache_params is not None:
-        print("[TTTModel] Cache params object exists:", isinstance(outputs.cache_params, TTTCache))
-
+        print(
+            "[TTTModel] Cache params object exists:",
+            isinstance(outputs.cache_params, TTTCache),
+        )
 
 
 if __name__ == "__main__":
-    #quick_check_ttt_mlp()
+    # quick_check_ttt_mlp()
     quick_check_ttt_model()

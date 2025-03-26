@@ -76,7 +76,9 @@ class VideoMNISTLitModule(LightningModule):
         :param replay_prob: Probability of sampling from the replay buffer vs. random init.
         """
         super().__init__()
-        self.save_hyperparameters(logger=False, ignore=("net", "optimizer", "scheduler"))
+        self.save_hyperparameters(
+            logger=False, ignore=("net", "optimizer", "scheduler")
+        )
 
         self.net = net
         self.optimzer = optimizer
@@ -137,7 +139,10 @@ class VideoMNISTLitModule(LightningModule):
         x_init_list = []
         for _ in range(batch_size):
             # with probability replay_prob, sample from replay buffer
-            if len(self.replay_buffer) > 0 and torch.rand(1).item() < self.hparams.replay_prob:
+            if (
+                len(self.replay_buffer) > 0
+                and torch.rand(1).item() < self.hparams.replay_prob
+            ):
                 # pick a random negative sample from buffer
                 buf_sample = self.replay_buffer[
                     torch.randint(len(self.replay_buffer), (1,)).item()
@@ -204,7 +209,9 @@ class VideoMNISTLitModule(LightningModule):
 
         # Update training loss metric and log
         self.train_loss.update(loss)
-        self.log("train/loss", self.train_loss, on_step=False, on_epoch=True, prog_bar=True)
+        self.log(
+            "train/loss", self.train_loss, on_step=False, on_epoch=True, prog_bar=True
+        )
         return loss
 
     def on_train_epoch_end(self) -> None:
@@ -245,7 +252,9 @@ class VideoMNISTLitModule(LightningModule):
         loss = e_pos.mean()
 
         self.test_loss.update(loss)
-        self.log("test/loss", self.test_loss, on_step=False, on_epoch=True, prog_bar=True)
+        self.log(
+            "test/loss", self.test_loss, on_step=False, on_epoch=True, prog_bar=True
+        )
 
     def on_test_epoch_end(self) -> None:
         """Lightning hook that is called when a test epoch ends."""

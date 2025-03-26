@@ -1,20 +1,33 @@
-import torch
-from typing import Sequence
-from pytorch_lightning import LightningDataModule
-from torch.utils.data import DataLoader
-
+from typing import Sequence, List, Dict, Any, Optional
 import tarfile
 import io
+
+import numpy as np
+import torch
+from torch.utils.data import DataLoader
 from internetarchive import download
 
-from src.data.video.base_video import BaseVideoDataset, BaseSimpleVideoDataset
-#from base_video_dataset import BaseVideoDataset
+from src.data.video.base_video import (
+    BaseVideoDataset,
+    BaseSimpleVideoDataset,
+    BaseAdvancedVideoDataset,
+)
 
 
-class MinecraftVideoDataset(BaseVideoDataset):
+class MinecraftBaseVideoDataset(BaseVideoDataset):
     def download_dataset(self) -> Sequence[int]:
         part_suffixes = [
-            "aa", "ab", "ac", "ad", "ae", "af", "ag", "ah", "ai", "aj", "ak"
+            "aa",
+            "ab",
+            "ac",
+            "ad",
+            "ae",
+            "af",
+            "ag",
+            "ah",
+            "ai",
+            "aj",
+            "ak",
         ]
         for part_suffix in part_suffixes:
             identifier = f"minecraft_marsh_dataset_{part_suffix}"
@@ -54,65 +67,91 @@ class MinecraftVideoDataset(BaseVideoDataset):
         video = video[frame_idx : frame_idx + self.n_frames]
         return torch.from_numpy(video / 255.0).float()
 
-#class MinecraftSimpleVideoDataset(MinecraftVideoDataset, BaseSimpleVideoDataset):
-#    """
-#    Minecraft simple video dataset
-#    """
-#
-#    def __init__(self, 
-#
-#        if split == "test":
-#            split = "validation"
-#        BaseSimpleVideoDataset.__init__(self, cfg, split)
+
+class MinecraftSimpleVideoDataset(MinecraftBaseVideoDataset, BaseSimpleVideoDataset):
+    """
+    Minecraft simple video dataset
+    """
+
+    def __init__(
+        self,
+        save_dir: str,
+        resolution: int,
+        latent_downsampling_factor: List[int],
+        latent_suffix: str,
+        split: str = "training",
+    ):
+        BaseSimpleVideoDataset.__init__(
+            self, save_dir, resolution, latent_downsampling_factor, latent_suffix, split
+        )
 
 
-class MinecraftDataModule(LightningDataModule):
-    def __init__(self, save_dir, resolution, external_cond_dim, n_frames, frame_skip, validation_multiplier, batch_size):
-        super().__init__()
-        self.save_dir = save_dir
-        self.resolution = resolution
-        self.external_cond_dim = external_cond_dim
-        self.n_frames = n_frames
-        self.frame_skip = frame_skip
-        self.validation_multiplier = validation_multiplier
-        self.batch_size = batch_size
+class MinecraftAdvancedVideoDataset(
+    MinecraftBaseVideoDataset, BaseAdvancedVideoDataset
+):
+    """
+    Minecraft advanced video dataset
+    """
 
-    def setup(self, stage=None):
-        if stage in (None, "fit"):
-            self.train_dataset = MinecraftVideoDataset(
-                self.save_dir, self.resolution, latent_downsampling_factor=[1,1], latent_suffix="jksd2ea",split="training"
-            )
-            self.val_dataset = MinecraftVideoDataset(
-                self.save_dir, self.resolution, latent_downsampling_factor=[1,1], latent_suffix="jksd2ea",split="validation"
-            )
-        if stage == "test":
-            self.test_dataset = MinecraftVideoDataset(
-                self.save_dir, self.resolution, self.external_cond_dim, self.n_frames, self.frame_skip, self.validation_multiplier, "validation"
-            )
+    def __init__(
+        self,
+        save_dir: str,
+        resolution: int,
+        latent_downsampling_factor: List[int],
+        latent_suffix: str,
+        split: str = "training",
+        current_epoch: Optional[int] = None,
+        latent_enable: bool = False,
+        latent_type: str = "pre_sample",
+        external_cond_dim: int = 4,
+        external_cond_stack: bool = True,
+        max_frames: int = 50,
+        n_frames: int = 17,
+        frame_skip: int = 2,
+        filter_min_len: Optional[int] = None,
+        subdataset_size: Optional[int] = None,
+        num_eval_videos: Optional[int] = None,
+    ):
+        if split == "test":
+            split = "validation"
+        BaseAdvancedVideoDataset.__init__(
+            self,
+            save_dir=save_dir,
+            resolution=resolution,
+            latent_downsampling_factor=latent_downsampling_factor,
+            latent_suffix=latent_suffix,
+            split=split,
+            current_epoch=current_epoch,
+            latent_enable=latent_enable,
+            latent_type=latent_type,
+            external_cond_dim=external_cond_dim,
+            external_cond_stack=external_cond_stack,
+            max_frames=max_frames,
+            n_frames=n_frames,
+            frame_skip=frame_skip,
+            filter_min_len=filter_min_len,
+            subdataset_size=subdataset_size,
+            num_eval_videos=num_eval_videos,
+        )
 
-    def train_dataloader(self):
-        return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=16)
-
-    def val_dataloader(self):
-        return DataLoader(self.val_dataset, batch_size=self.batch_size, shuffle=False, num_workers=16)
-
-    def test_dataloader(self):
-        return DataLoader(self.test_dataset, batch_size=self.batch_size, shuffle=False, num_workers=16)
+    def load_cond(
+        self, video_metadata: Dict[str, Any], start_frame: int, end_frame: int
+    ) -> torch.Tensor:
+        path = video_metadata["video_paths"].with_suffix(".npz")
+        actions = np.load(path)["actions"][start_frame:end_frame]
+        return torch.from_numpy(np.eye(4)[actions]).float()
 
 
 # Usage example
 if __name__ == "__main__":
-    data_module = MinecraftDataModule(
-        save_dir="/data/cvg/sebastian/minecraft_marsh",
+    dataset = MinecraftSimpleVideoDataset(
+        save_dir="data",
         resolution=64,
-        external_cond_dim=0,
-        n_frames=64,
-        frame_skip=2,
-        validation_multiplier=1,
-        batch_size=4
+        latent_downsampling_factor=[1, 1, 1, 1],
+        latent_suffix="",
+        split="training",
     )
-    data_module.setup()
+    dataloader = DataLoader(dataset, batch_size=2, shuffle=True)
 
-
-    for batch in data_module.train_dataloader():
+    for batch in dataloader.train_dataloader():
         print(batch)

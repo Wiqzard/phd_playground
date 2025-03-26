@@ -10,11 +10,13 @@ def freeze_model(model: nn.Module) -> None:
     for param in model.parameters():
         param.requires_grad = False
 
+
 def unfreeze_model(model: nn.Module) -> None:
     """Unfreeze the torch model"""
     model.train()
     for param in model.parameters():
         param.requires_grad = True
+
 
 def bernoulli_tensor(
     size: _size,

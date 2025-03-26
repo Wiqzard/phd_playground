@@ -8,6 +8,7 @@ import random
 from typing import Any, Dict, List, Tuple, Optional
 from torch.utils.data import Dataset
 
+
 def get_frame_count_ffprobe(video_path: str) -> int:
     """
     Run ffprobe to get the total frame count of a video file.
@@ -15,15 +16,21 @@ def get_frame_count_ffprobe(video_path: str) -> int:
     """
     cmd = [
         "ffprobe",
-        "-v", "error",
+        "-v",
+        "error",
         "-count_frames",
-        "-select_streams", "v:0",
-        "-show_entries", "stream=nb_read_frames",
-        "-print_format", "csv",
-        video_path
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=nb_read_frames",
+        "-print_format",
+        "csv",
+        video_path,
     ]
     try:
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        result = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
         # The output is typically: "stream,nb_read_frames,<number_of_frames>"
         # e.g., "stream,nb_read_frames,1234"
         output = result.stdout.strip()
@@ -33,9 +40,10 @@ def get_frame_count_ffprobe(video_path: str) -> int:
         print(f"ffprobe error on {video_path}: {e}")
         return 0
 
+
 class BasaltClipsDataset(Dataset):
     """
-    A dataset where each index corresponds to a specific clip of length `seq_len` 
+    A dataset where each index corresponds to a specific clip of length `seq_len`
     from a given video. Clips can overlap based on `stride`.
     """
 
@@ -113,13 +121,12 @@ class BasaltClipsDataset(Dataset):
             # Use ffprobe in parallel
             with multiprocessing.Pool() as pool:
                 frame_counts = pool.map(
-                    get_frame_count_ffprobe,
-                    [v[0] for v in self.video_json_pairs]
+                    get_frame_count_ffprobe, [v[0] for v in self.video_json_pairs]
                 )
         else:
             # Use OpenCV (slower, single-threaded)
             frame_counts = []
-            for (video_path, _) in self.video_json_pairs:
+            for video_path, _ in self.video_json_pairs:
                 cap = cv2.VideoCapture(video_path)
                 n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
                 cap.release()
@@ -153,7 +160,7 @@ class BasaltClipsDataset(Dataset):
         """
         Load the clip (seq_len frames) starting at `start_frame` from the video at `video_path`.
         Also load the aligned JSON actions from the same frame range.
-        Return them in a dict, e.g.: 
+        Return them in a dict, e.g.:
           { 'video': Tensor of shape [seq_len, C, H, W],
             'actions': <whatever structure you want> }
         """
@@ -203,12 +210,11 @@ if __name__ == "__main__":
         data_dir="/data/cvg/sebastian/minecraft",
         seq_len=8,
         overlap=4,  # e.g. half overlap
-        transform=None,   # or transforms.ToTensor() etc.
-        use_ffprobe=True, # requires ffprobe installed
+        transform=None,  # or transforms.ToTensor() etc.
+        use_ffprobe=True,  # requires ffprobe installed
     )
 
     print("Number of clips:", len(dataset))
     sample = dataset[0]
     print("Video clip shape:", sample["video"].shape)  # (seq_len, C, H, W)
     print("Number of actions in clip:", len(sample["actions"]))
-

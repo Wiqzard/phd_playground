@@ -21,7 +21,16 @@ class BaseVideoDataset(Dataset, ABC):
             metadata.json
     """
 
-    def __init__(self, save_dir, resolution, external_cond_dim, n_frames, frame_skip, validation_multiplier, split="training"):
+    def __init__(
+        self,
+        save_dir,
+        resolution,
+        external_cond_dim,
+        n_frames,
+        frame_skip,
+        validation_multiplier,
+        split="training",
+    ):
         super().__init__()
         self.split = split
         self.resolution = resolution
@@ -41,7 +50,7 @@ class BaseVideoDataset(Dataset, ABC):
         if not self.metadata_path.exists():
             # Build dataset
             print(f"Creating dataset in {self.save_dir}...")
-            #self.download_dataset()
+            # self.download_dataset()
             json.dump(
                 {
                     "training": self.get_data_lengths("training"),
@@ -52,11 +61,13 @@ class BaseVideoDataset(Dataset, ABC):
 
         self.metadata = json.load(open(self.metadata_path, "r"))
         self.data_paths = self.get_data_paths(self.split)
-        self.clips_per_video = np.clip(np.array(self.metadata[split]) - self.n_frames + 1, a_min=1, a_max=None).astype(
-            np.int32
-        )
+        self.clips_per_video = np.clip(
+            np.array(self.metadata[split]) - self.n_frames + 1, a_min=1, a_max=None
+        ).astype(np.int32)
         self.cum_clips_per_video = np.cumsum(self.clips_per_video)
-        self.transform = transforms.Resize((self.resolution, self.resolution), antialias=True)
+        self.transform = transforms.Resize(
+            (self.resolution, self.resolution), antialias=True
+        )
 
     @abstractmethod
     def download_dataset(self) -> Sequence[int]:

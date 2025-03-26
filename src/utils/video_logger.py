@@ -1,5 +1,6 @@
 from lightning.pytorch.callbacks import Callback
 
+
 class VideoLogger(Callback):
     def __init__(self, log_dir: str, log_freq: int = 100) -> None:
         """Initialize a `VideoLogger`.

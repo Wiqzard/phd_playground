@@ -23,6 +23,7 @@ class BaseLightningTrainer(pl.LightningModule, ABC):
 
     def __init__(self, should_validate_ema_weights=False, **kwargs: Any):
         super().__init__()
+        self.should_validate_ema_weights = should_validate_ema_weights
 
     @abstractmethod
     def training_step(self, *args: Any, **kwargs: Any) -> STEP_OUTPUT:
@@ -88,7 +89,7 @@ class BaseLightningTrainer(pl.LightningModule, ABC):
         return torch.optim.Adam(parameters, lr=self.cfg.lr)
 
     def on_load_checkpoint(self, checkpoint: dict) -> None:
-        if self.hparams.should_validate_ema_weights:
+        if self.should_validate_ema_weights:
             self._load_ema_weights_to_state_dict(checkpoint)
 
     def _load_ema_weights_to_state_dict(self, checkpoint: dict) -> None:

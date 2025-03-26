@@ -1,6 +1,3 @@
-    
-
-
 def _load_vae(self) -> None:
     """
     Load the pretrained VAE model.
@@ -14,6 +11,7 @@ def _load_vae(self) -> None:
         **self.cfg.vae.pretrained_kwargs,
     ).to(self.device)
     freeze_model(self.vae)
+
 
 @torch.no_grad()
 def _run_vae(
@@ -49,9 +47,8 @@ def _run_vae(
 
 
 def _encode(self, x: Tensor, shape: str = "b t c h w") -> Tensor:
-    return self._run_vae(
-        x, shape, lambda y: self.vae.encode(2.0 * y - 1.0).sample()
-    )
+    return self._run_vae(x, shape, lambda y: self.vae.encode(2.0 * y - 1.0).sample())
+
 
 def _decode(self, latents: Tensor, shape: str = "b t c h w") -> Tensor:
     return self._run_vae(

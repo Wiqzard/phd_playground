@@ -14,7 +14,9 @@ from src.models.components.embedding.embeddings import (
     RandomDropoutCondEmbedding,
 )
 from src.models.components.transformer.ditv2 import DiTBase
+
 # ---- BaseBackbone without config ----
+
 
 class BaseBackbone(ABC, nn.Module):
     def __init__(
@@ -219,5 +221,3 @@ class DiT3D(BaseBackbone):
             x, "(b t) h w c -> b t c h w", b=input_batch_size
         )  # (B, T, C, H, W)
         return x
-
-

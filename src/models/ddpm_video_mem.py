@@ -71,7 +71,13 @@ class DiffusionModelTrainer(BaseLightningTrainer):
         """
         super().__init__()
         self.save_hyperparameters(
-            ignore=("model", "diffusion_model", "optimizer", "lr_scheduler", "scheduler")
+            ignore=(
+                "model",
+                "diffusion_model",
+                "optimizer",
+                "lr_scheduler",
+                "scheduler",
+            )
         )
         # self.model = model
         self.optimizer = optimizer
@@ -93,10 +99,11 @@ class DiffusionModelTrainer(BaseLightningTrainer):
             self.hparams.x_shape = [self.haparams.latent_num_channels] + [
                 d // latent_downsampling_factor[1] for d in self.hparams.x_shape[1:]
             ]
-            #if self.is_latent_video_vae:
+            # if self.is_latent_video_vae:
             #    self.check_video_vae_compatibility(cfg)
-
-
+        self.external_cond_dim = self.hparams.external_cond_dim * (
+            self.hparams.frame_skip if self.hparams.external_cond_stack else 1
+        )
 
         self.tasks = [task for task in self.hparams.tasks]
 
@@ -167,7 +174,7 @@ class DiffusionModelTrainer(BaseLightningTrainer):
         self.diffusion_model = self.diffusion_model(
             x_shape=self.hparams.x_shape,
             max_tokens=self.max_tokens,
-            external_cond_dim=self.hparams.external_cond_dim,
+            external_cond_dim=self.external_cond_dim,
         )
 
         if self.hparams.ckpt_path:
@@ -211,10 +218,11 @@ class DiffusionModelTrainer(BaseLightningTrainer):
                 # pylint: disable=protected-access
                 torch._dynamo.config.optimize_ddp = False
 
-        # self.diffusion_model = torch.compile(
-        #    self.diffusion_model ,
-        #    disable=not self.compile_model,
-        # )
+        self.diffusion_model = torch.compile(
+            self.diffusion_model,
+            disable=not self.compile_model,
+        )
+
         self.register_data_mean_std(self.hparams.data_mean, self.hparams.data_std)
 
         # 2. VAE model
@@ -400,7 +408,7 @@ class DiffusionModelTrainer(BaseLightningTrainer):
             batch_size,
         )
         cut_videos = lambda x: x[:num_videos_to_log]
-        #raw_dir = self.trainer.log_dir
+        # raw_dir = self.trainer.log_dir
 
         for task in self.tasks:
             log_video(
@@ -410,7 +418,7 @@ class DiffusionModelTrainer(BaseLightningTrainer):
                 namespace=f"{task}_vis",
                 logger=self.logger.experiment,
                 indent=self.num_logged_videos,
-                raw_dir=raw_dir, #self.trainer.log_dir,
+                raw_dir=raw_dir,  # self.trainer.log_dir,
                 context_frames=(
                     self.n_context_frames
                     if task == "prediction"
@@ -447,11 +455,11 @@ class DiffusionModelTrainer(BaseLightningTrainer):
         match self.hparams.external_cond_processing:
             case "mask_first":
                 mask = torch.ones_like(conditions)
-                mask[:, :1, : self.hparams.external_cond_dim] = 0
+                mask[:, :1, : self.external_cond_dim] = 0
                 return conditions * mask
             case _:
                 raise NotImplementedError(
-                    f"External condition processing {self.cfg.external_cond_processing} is not implemented."
+                    f"External condition processing {self.hparams.external_cond_processing} is not implemented."
                 )
 
     # ---------------------------------------------------------------------
@@ -465,7 +473,10 @@ class DiffusionModelTrainer(BaseLightningTrainer):
         batch_size = x.shape[0]
         if timesteps is None:
             timesteps = torch.randint(
-                0, self.scheduler.config.num_train_timesteps, (batch_size,), device=x.device
+                0,
+                self.scheduler.config.num_train_timesteps,
+                (batch_size,),
+                device=x.device,
             ).long()
         x_noisy = self.scheduler.add_noise(x, noise, timesteps)
         y = torch.zeros((batch_size,), device=x.device, dtype=torch.long)
@@ -489,21 +500,30 @@ class DiffusionModelTrainer(BaseLightningTrainer):
 
             if False:
                 noise_pred, memory_states, suprises = self.model.forward(
-                    x_noisy_i, timesteps, cond=y, memory_states=memory_states, return_memory=True
+                    x_noisy_i,
+                    timesteps,
+                    cond=y,
+                    memory_states=memory_states,
+                    return_memory=True,
                 )
             else:
                 # noise_pred = self.model.forward(x_noisy_i, timesteps, cond=y, cache_params=memory_states, use_cache=False)
                 y = None
 
                 noise_pred, memory_states, aux_output = self.model.forward(
-                    x_noisy_i, timesteps, external_cond=y, neural_memory_cache=memory_states
+                    x_noisy_i,
+                    timesteps,
+                    external_cond=y,
+                    neural_memory_cache=memory_states,
                 )
                 noise_pred = noise_pred[:, :, :3]
                 # noise_pred, memory_states = self.model.forward(x_noisy_i, timesteps, cond=y, cache_params=memory_states, use_cache=True, run=i)
                 suprises = torch.zeros_like(noise_pred)
             # b, t, c, h, w
             x_pred = self.scheduler.get_velocity(
-                sample=noise_pred, noise=x_noisy_i[:, :, :3], timesteps=timesteps.squeeze(-1)
+                sample=noise_pred,
+                noise=x_noisy_i[:, :, :3],
+                timesteps=timesteps.squeeze(-1),
             )
             video.append(x_pred)
 
@@ -521,7 +541,10 @@ class DiffusionModelTrainer(BaseLightningTrainer):
         return x_pred, diffusion_loss, None  # , #suprises
 
     def training_step(
-        self, batch: Tuple[Tensor, Tensor, Tensor], batch_idx: int, namespace: str = "training"
+        self,
+        batch: Tuple[Tensor, Tensor, Tensor],
+        batch_idx: int,
+        namespace: str = "training",
     ) -> STEP_OUTPUT:
         """Training step"""
         xs, conditions, masks, *_ = batch
@@ -529,25 +552,26 @@ class DiffusionModelTrainer(BaseLightningTrainer):
         noise_levels, masks = self._get_training_noise_levels(xs, masks)
         xs_pred, loss, aux_loss = self.diffusion_model.diffusion_loss_for_noise_level(
             x=xs,
+            conditions=self._process_conditions(conditions),
             noise_level=noise_levels,
             context_frame_mask=masks,
             sliding_context_len=self.hparams.sliding_context_len,
         )
 
         # -------------------------
-#        xs = xs[:, :3]
-#        noise_levels = noise_levels[:, :3]
-#        masks = masks[:, :3]
-#        if torch.rand(1) < 0.2:
-#            masks = torch.ones_like(masks)
-#
-        #xs_pred, loss, aux_loss = self.diffusion_model.forward(
+        #        xs = xs[:, :3]
+        #        noise_levels = noise_levels[:, :3]
+        #        masks = masks[:, :3]
+        #        if torch.rand(1) < 0.2:
+        #            masks = torch.ones_like(masks)
+        #
+        # xs_pred, loss, aux_loss = self.diffusion_model.forward(
         #    xs,
         #    self._process_conditions(conditions),
         #    k=noise_levels,
         #    context_frame_mask=masks,
-        #)
-        #masks = torch.ones_like(masks)
+        # )
+        # masks = torch.ones_like(masks)
         # -------------------------
 
         loss = self._reweight_loss(loss, masks)
@@ -640,7 +664,6 @@ class DiffusionModelTrainer(BaseLightningTrainer):
                 prog_bar=True,
                 sync_dist=True,
             )
-
 
     def test_step(self, *args: Any, **kwargs: Any) -> STEP_OUTPUT:
         return self.validation_step(*args, **kwargs, namespace="test")
@@ -1099,7 +1122,9 @@ class DiffusionModelTrainer(BaseLightningTrainer):
 
                     # only replace the tokens being generated (revert context tokens)
                     new_xs_pred = torch.where(
-                        self._extend_x_dim(context_mask) == 0, new_xs_pred, new_xs_pred_prev
+                        self._extend_x_dim(context_mask) == 0,
+                        new_xs_pred,
+                        new_xs_pred_prev,
                     )
 
                     if self.hparams.cat_context_in_c_dim:
@@ -1116,7 +1141,11 @@ class DiffusionModelTrainer(BaseLightningTrainer):
                     record = record[:, :, :-padding] if return_all else None
 
             xs_pred = torch.cat(
-                [xs_pred[:, :, : context.shape[2]], new_xs_pred[:, -h:, : context.shape[2]]], 1
+                [
+                    xs_pred[:, :, : context.shape[2]],
+                    new_xs_pred[:, -h:, : context.shape[2]],
+                ],
+                1,
             )
             curr_token = xs_pred.shape[1]
         pbar.close()
@@ -1245,7 +1274,16 @@ class DiffusionModelTrainer(BaseLightningTrainer):
                         in_context = context[:, chunk_slice]
                     in_context = F.pad(
                         in_context,
-                        (0, 0, 0, 0, 0, 0, 0, current_chunk.shape[1] - in_context.shape[1]),
+                        (
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            current_chunk.shape[1] - in_context.shape[1],
+                        ),
                     )
                     current_chunk = torch.cat([current_chunk, in_context], dim=2)
 
@@ -1257,6 +1295,7 @@ class DiffusionModelTrainer(BaseLightningTrainer):
                     None,  # conditions_mask if needed
                     guidance_fn=guidance_fn,
                     neural_memory_cache=neural_memory_cache,
+                    cfg_scale=self.hparams.cfg_scale,
                 )
                 neural_memory_cache, aux_output = aux_output[0][0]
                 if self.hparams.cat_context_in_c_dim:
@@ -1337,7 +1376,9 @@ class DiffusionModelTrainer(BaseLightningTrainer):
             0, (length - sliding_context_len - 1) // (horizon - sliding_context_len)
         )
         pbar = tqdm(
-            total=total_windows * total_noise_steps, desc="Dreaming Dreams in Time", leave=False
+            total=total_windows * total_noise_steps,
+            desc="Dreaming Dreams in Time",
+            leave=False,
         )
 
         record_list = [] if return_all else None
@@ -1378,7 +1419,9 @@ class DiffusionModelTrainer(BaseLightningTrainer):
                     # random only for the new region h
                     b = h if not self.hparams.cat_context_in_c_dim else l
                     pad_tokens = torch.randn(
-                        (batch_size, b, *x_shape), device=device, generator=self.generator
+                        (batch_size, b, *x_shape),
+                        device=device,
+                        generator=self.generator,
                     )
                     pad_tokens = torch.clamp(
                         pad_tokens, -self.hparams.clip_noise, self.hparams.clip_noise
@@ -1559,7 +1602,9 @@ class DiffusionModelTrainer(BaseLightningTrainer):
             0, (length - sliding_context_len - 1) // (horizon - sliding_context_len)
         )
         pbar = tqdm(
-            total=total_windows * total_noise_steps, desc="Predicting with DFoT", leave=False
+            total=total_windows * total_noise_steps,
+            desc="Predicting with DFoT",
+            leave=False,
         )
 
         record_list = [] if return_all else None
@@ -1629,10 +1674,14 @@ class DiffusionModelTrainer(BaseLightningTrainer):
                     context_mask = torch.cat([context_mask, pad_cmask], dim=1)
 
                     chunk_pad_latent = torch.randn(
-                        (batch_size, padding, *x_shape), device=device, generator=self.generator
+                        (batch_size, padding, *x_shape),
+                        device=device,
+                        generator=self.generator,
                     )
                     chunk_pad_latent = torch.clamp(
-                        chunk_pad_latent, -self.hparams.clip_noise, self.hparams.clip_noise
+                        chunk_pad_latent,
+                        -self.hparams.clip_noise,
+                        self.hparams.clip_noise,
                     )
                     chunk_latent = torch.cat([chunk_latent, chunk_pad_latent], dim=1)
 
@@ -1912,7 +1961,9 @@ class DiffusionModelTrainer(BaseLightningTrainer):
                 if context is None:
                     context = torch.zeros_like(xs_pred)
                     context_mask = torch.zeros(
-                        (batch_size, self.max_tokens), dtype=torch.long, device=self.device
+                        (batch_size, self.max_tokens),
+                        dtype=torch.long,
+                        device=self.device,
                     )
 
                 # If we do NOT concatenate context into the diffusion model's channels,
@@ -1997,7 +2048,9 @@ class DiffusionModelTrainer(BaseLightningTrainer):
                 [
                     context,
                     torch.zeros(
-                        (batch_size, padding, *x_shape), device=self.device, dtype=context.dtype
+                        (batch_size, padding, *x_shape),
+                        device=self.device,
+                        dtype=context.dtype,
                     ),
                 ],
                 dim=1,
@@ -2105,7 +2158,9 @@ class DiffusionModelTrainer(BaseLightningTrainer):
                 if context is None:
                     context_in = torch.zeros_like(xs_pred)
                     context_mask_in = torch.zeros(
-                        (batch_size, self.max_tokens), dtype=torch.long, device=self.device
+                        (batch_size, self.max_tokens),
+                        dtype=torch.long,
+                        device=self.device,
                     )
                     # context mask is 1 for sliding_window_context_length frames and 0 for the rest
                 context_mask_in = torch.cat(
@@ -2153,7 +2208,9 @@ class DiffusionModelTrainer(BaseLightningTrainer):
 
                 # Revert context tokens to their original values
                 xs_pred_in = torch.where(
-                    self._extend_x_dim(context_mask_in) == 0, xs_pred_in, xs_pred_prev_in
+                    self._extend_x_dim(context_mask_in) == 0,
+                    xs_pred_in,
+                    xs_pred_prev_in,
                 )
                 xs_pred[:, i * idx : (i + 1) * idx] = xs_pred_in
 
@@ -2363,8 +2420,7 @@ class DiffusionModelTrainer(BaseLightningTrainer):
         for key, weight in zip(parameter_keys, ema_weights):
             checkpoint["state_dict"][key] = weight
 
-
-    #def check_video_vae_compatibility(self, cfg: DictConfig):
+    # def check_video_vae_compatibility(self, cfg: DictConfig):
     #    """
     #    Check if the configuration is compatible with VideoVAE.
     #    Currently, it is not compatible with many functionalities, due to complicated shape/length changes.

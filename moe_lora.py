@@ -65,7 +65,9 @@ class MultiLoRALinear(nn.Module):
         nn.init.normal_(self.lora_A, std=1e-4)
         nn.init.normal_(self.lora_B, std=1e-4)
 
-    def forward(self, x: torch.Tensor, lora_indices: torch.Tensor = None) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, lora_indices: torch.Tensor = None
+    ) -> torch.Tensor:
         """
         x: [batch_size, ..., in_features]
         lora_indices: [batch_size], specifying which LoRA slot to use per sample.
@@ -180,9 +182,9 @@ def patch_ditblock_forward(block):
     import types
 
     def forward_with_lora(self, x, c, lora_indices=None):
-        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(
-            c
-        ).chunk(6, dim=1)
+        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
+            self.adaLN_modulation(c).chunk(6, dim=1)
+        )
         # MSA
         x = x + gate_msa.unsqueeze(1) * self.attn(
             modulate(self.norm1(x), shift_msa, scale_msa), lora_indices=lora_indices
@@ -208,7 +210,9 @@ def patch_finallayer_forward(final_layer):
     final_layer.forward = types.MethodType(forward_with_lora, final_layer)
 
 
-def replace_linear_with_lora(module: nn.Module, num_lora_slots: int, rank: int, alpha: float):
+def replace_linear_with_lora(
+    module: nn.Module, num_lora_slots: int, rank: int, alpha: float
+):
     """
     Recursively traverse `module`, and whenever we find an nn.Linear,
     replace it with MultiLoRALinear wrapping the original linear weights.
@@ -222,7 +226,9 @@ def replace_linear_with_lora(module: nn.Module, num_lora_slots: int, rank: int, 
             setattr(module, name, wrapped)
 
 
-def inject_lora(model: nn.Module, num_lora_slots: int, rank: int = 4, alpha: float = 1.0):
+def inject_lora(
+    model: nn.Module, num_lora_slots: int, rank: int = 4, alpha: float = 1.0
+):
     """
     Modifies a DiT model *in-place* so that:
       1) All nn.Linear layers in the attention, Mlp, and final layer become MultiLoRALinear.
@@ -274,7 +280,9 @@ def inject_lora(model: nn.Module, num_lora_slots: int, rank: int = 4, alpha: flo
 ###############################################################################
 
 
-def replace_linear_with_lora(module: nn.Module, num_lora_slots: int, rank: int, alpha: float):
+def replace_linear_with_lora(
+    module: nn.Module, num_lora_slots: int, rank: int, alpha: float
+):
     """
     Recursively traverse `module`, and whenever we find an nn.Linear,
     replace it with MultiLoRALinear wrapping the original linear weights.
@@ -293,7 +301,9 @@ def replace_linear_with_lora(module: nn.Module, num_lora_slots: int, rank: int, 
 ###############################################################################
 
 
-def inject_lora(model: nn.Module, num_lora_slots: int, rank: int = 4, alpha: float = 1.0):
+def inject_lora(
+    model: nn.Module, num_lora_slots: int, rank: int = 4, alpha: float = 1.0
+):
     """
     Modifies a DiT model *in-place* so that:
       1) All nn.Linear layers in the attention, Mlp, and final layer become MultiLoRALinear.

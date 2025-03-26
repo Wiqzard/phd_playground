@@ -7,9 +7,7 @@ from titans.titans_pytorch.memory_models import (
     MemoryAttention,
     FactorizedMemoryMLP,
     MemorySwiGluMLP,
-    GatedResidualMemoryMLP
+    GatedResidualMemoryMLP,
 )
 
-from titans.titans_pytorch.mac_transformer import (
-    MemoryAsContextTransformer
-)
+from titans.titans_pytorch.mac_transformer import MemoryAsContextTransformer

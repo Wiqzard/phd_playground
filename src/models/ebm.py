@@ -13,6 +13,7 @@ from torchmetrics import MeanMetric
 
 import math
 
+
 def get_cosine_sigma(step, max_steps, sigma_min, sigma_max):
     """
     Returns a sigma value following a cosine schedule from sigma_max down to sigma_min.
@@ -24,7 +25,9 @@ def get_cosine_sigma(step, max_steps, sigma_min, sigma_max):
     # Make sure step is in [0, max_steps]
     fraction = step / float(max_steps)
     # Cosine decay from sigma_max down to sigma_min
-    sigma_t = sigma_min + 0.5 * (sigma_max - sigma_min) * (1 + math.cos(math.pi * fraction))
+    sigma_t = sigma_min + 0.5 * (sigma_max - sigma_min) * (
+        1 + math.cos(math.pi * fraction)
+    )
     return sigma_t
 
 
@@ -88,11 +91,11 @@ def sample_langevin(
     for k in range(K):
         model(x_neg).sum().backward()
         with torch.no_grad():
-            #x_neg.grad.clamp_(-0.01, 0.01)
+            # x_neg.grad.clamp_(-0.01, 0.01)
             # set first frame to zero
-            update = (
-                -step_size * x_neg.grad
-            )   + sigma * torch.randn(*x_neg.shape).to(x_neg.device)
+            update = (-step_size * x_neg.grad) + sigma * torch.randn(*x_neg.shape).to(
+                x_neg.device
+            )
             update *= mask  # Apply the mask to zero out updates for the first frame
             x_neg += update
             x_neg.clamp_(-1, 1)
@@ -100,20 +103,24 @@ def sample_langevin(
     return x_neg.requires_grad_(False)
     import math
 
+
 def get_cosine_value(current_step, total_steps, min_value, max_value):
     """
-    Returns a value following a (half) cosine schedule 
+    Returns a value following a (half) cosine schedule
     from max_value down to min_value.
-    
+
     current_step: which iteration we are in [0, total_steps-1]
     total_steps : total number of Langevin steps (K)
     min_value   : lower bound
     max_value   : upper bound
     """
     # fraction goes from 0 to 1 across total_steps
-    fraction = current_step / float(total_steps - 1)  # -1 to ensure fraction=1 at last step
-    return min_value + 0.5 * (max_value - min_value) * (1 + math.cos(math.pi * fraction))
-
+    fraction = current_step / float(
+        total_steps - 1
+    )  # -1 to ensure fraction=1 at last step
+    return min_value + 0.5 * (max_value - min_value) * (
+        1 + math.cos(math.pi * fraction)
+    )
 
     # x_neg = x_init.clone().detach().requires_grad_(True)  # True
     # for i in range(K):
@@ -164,7 +171,9 @@ class EnergyBasedTrainer(LightningModule):
         :param replay_prob: Probability of sampling from the replay buffer vs. random init.
         """
         super().__init__()
-        self.save_hyperparameters(logger=False, ignore=("net", "optimizer", "scheduler"))
+        self.save_hyperparameters(
+            logger=False, ignore=("net", "optimizer", "scheduler")
+        )
 
         self.net = net
         self.optimizer = optimizer
@@ -191,7 +200,9 @@ class EnergyBasedTrainer(LightningModule):
         """
         # Ensure output is (B,) for a batch size B
         print(2000 * "ones?")
-        y, t = torch.zeros(x.shape[0], device=x.device), torch.zeros(x.shape[0], device=x.device)
+        y, t = torch.zeros(x.shape[0], device=x.device), torch.zeros(
+            x.shape[0], device=x.device
+        )
         return self.net(x, y, t).squeeze(-1)
 
     ###########################################################################
@@ -227,7 +238,10 @@ class EnergyBasedTrainer(LightningModule):
         x_init_list = []
         for k in range(batch_size):
             # with probability replay_prob, sample from replay buffer
-            if len(self.replay_buffer) > 0 and torch.rand(1).item() < self.hparams.replay_prob:
+            if (
+                len(self.replay_buffer) > 0
+                and torch.rand(1).item() < self.hparams.replay_prob
+            ):
                 # pick a random negative sample from buffer
                 buf_sample = self.replay_buffer[
                     torch.randint(len(self.replay_buffer), (1,)).item()
@@ -251,22 +265,22 @@ class EnergyBasedTrainer(LightningModule):
         # ----------------------------
         # 2) Langevin dynamics
         # ----------------------------
-        #x_neg = sample_langevin(
-            #model=self,
-            #x_init=x_init,
-            #K=self.hparams.K,
-            #step_size=self.hparams.step_size,
-            #sigma=self.hparams.sigma,
-        #).detach()
+        # x_neg = sample_langevin(
+        # model=self,
+        # x_init=x_init,
+        # K=self.hparams.K,
+        # step_size=self.hparams.step_size,
+        # sigma=self.hparams.sigma,
+        # ).detach()
 
         # ----------------------------
         # 3) Compute energies
         # ----------------------------
 
-        #e_pos = self.forward(x_pos)  # E_\theta(x^+)
-        #e_neg = self.forward(x_neg)  # E_\theta(x^-)
+        # e_pos = self.forward(x_pos)  # E_\theta(x^+)
+        # e_neg = self.forward(x_neg)  # E_\theta(x^-)
 
-        #if torch.randn(1).item() < 1:  # 0.05:
+        # if torch.randn(1).item() < 1:  # 0.05:
         #    self.log_negative_training_samples(x_neg[:1,])
 
         # ----------------------------
@@ -275,18 +289,18 @@ class EnergyBasedTrainer(LightningModule):
         # ----------------------------
         # reconstruction loss
         # MSE(gradient E(x+noise), x + noise)
-        
+
         step = torch.randint(10000, (1,)).item()
         sigma = get_cosine_sigma(step, 10000, 0.01, 1)
-        
+
         # 2. Sample noise ε ~ N(0, I)
         noise = torch.randn_like(x_pos)
-        
+
         # 3. Create noisy input: x_t = x_pos + sigma * noise
         x_t = x_pos + sigma * noise
         x_t.requires_grad_(True)
-        # 4. Forward pass: f_θ(x_t). 
-        #    If your model returns scalar energy per sample, 
+        # 4. Forward pass: f_θ(x_t).
+        #    If your model returns scalar energy per sample,
         #    you might want to sum over batch dimension => .sum(dim=-1)
         e_xt = self.forward(x_t).sum(dim=-1)
         if torch.randn(1).item() < 1:  # 0.05:
@@ -306,23 +320,21 @@ class EnergyBasedTrainer(LightningModule):
         #    i.e.  || (ε / σ) + grad_energy ||^2
         #    *Important:*  we want (grad_energy + noise/sigma).
         diff = grad_energy + (noise / sigma)
-        loss = (diff ** 2).mean() 
+        loss = (diff**2).mean()
 
-
-
-        loss_l2 = 0 #(e_pos**2 + e_neg**2).mean()
-        loss_ml = 0 #(e_pos - e_neg).mean()
+        loss_l2 = 0  # (e_pos**2 + e_neg**2).mean()
+        loss_ml = 0  # (e_pos - e_neg).mean()
         loss = self.hparams.alpha * loss_l2 + loss_ml + loss
 
         # ----------------------------
         # 5) Update replay buffer
         # ----------------------------
-#        x_neg_cpu = x_neg.detach().cpu()
-#        self.replay_buffer.extend(list(x_neg_cpu))
-#        # Keep only the most recent samples
-#        if len(self.replay_buffer) > self.hparams.buffer_size:
-#            self.replay_buffer = self.replay_buffer[-self.hparams.buffer_size :]
-#
+        #        x_neg_cpu = x_neg.detach().cpu()
+        #        self.replay_buffer.extend(list(x_neg_cpu))
+        #        # Keep only the most recent samples
+        #        if len(self.replay_buffer) > self.hparams.buffer_size:
+        #            self.replay_buffer = self.replay_buffer[-self.hparams.buffer_size :]
+        #
         return loss
 
     def log_negative_training_samples(self, x_neg: torch.Tensor):
@@ -422,21 +434,30 @@ class EnergyBasedTrainer(LightningModule):
         self.logger.experiment.log(
             {
                 "input_video": wandb.Video(
-                    ground_truth_in_video_to_log, fps=4, format="gif"  # Adjust FPS as needed
+                    ground_truth_in_video_to_log,
+                    fps=4,
+                    format="gif",  # Adjust FPS as needed
                 )
             }
         )
         self.logger.experiment.log(
             {
                 "ground_truth_video": wandb.Video(
-                    ground_truth_video_to_log, fps=4, format="gif"  # Adjust FPS as needed
+                    ground_truth_video_to_log,
+                    fps=4,
+                    format="gif",  # Adjust FPS as needed
                 )
             }
         )
 
         self.val_loss.update(loss)
         self.log(
-            "val/loss", self.val_loss, on_step=True, on_epoch=False, prog_bar=True, logger=True
+            "val/loss",
+            self.val_loss,
+            on_step=True,
+            on_epoch=False,
+            prog_bar=True,
+            logger=True,
         )
 
     def on_validation_epoch_end(self) -> None:
@@ -457,7 +478,12 @@ class EnergyBasedTrainer(LightningModule):
 
         self.test_loss.update(loss)
         self.log(
-            "test/loss", self.test_loss, on_step=False, on_epoch=True, prog_bar=True, logger=True
+            "test/loss",
+            self.test_loss,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            logger=True,
         )
 
     def on_test_epoch_end(self) -> None:

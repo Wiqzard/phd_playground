@@ -33,6 +33,7 @@ MNIST
 wandb
 lightning_logs
 huggingface
+huggingface/
 *.mp4
 
 # PyInstaller

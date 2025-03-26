@@ -6,6 +6,7 @@ from einops import einsum, rearrange, repeat, reduce, pack, unpack
 
 from tensordict import TensorDict
 
+
 def repeat_dict_values(td, pattern, **kwargs):
     return td.apply(lambda t: repeat(t, pattern, **kwargs))
 
@@ -46,19 +47,19 @@ class TTTMoE(nn.Module):
         num_experts = 8
         self.memory_model = MemoryMLP(self.dim, depth=2)
 
-        
         mem_model_params = dict(self.memory_model.named_parameters())
         memory_model_parameters = [*mem_model_params.values()]
         memory_model_parameter_names = [*mem_model_params.keys()]
         memory_model_parameters = nn.ParameterList(memory_model_parameters)
-        self.memory_model_parameter_dict = TensorDict(dict(zip(memory_model_parameter_names, memory_model_parameters)))
-
+        self.memory_model_parameter_dict = TensorDict(
+            dict(zip(memory_model_parameter_names, memory_model_parameters))
+        )
 
         self.to_keys = nn.Sequential(
             nn.Linear(self.dim, self.dim, bias=False),
         )
-        #self.W = nn.Parameter(torch.normal(0, 0.02, size=(num_experts, self.dim, self.dim)))
-        #self.b = nn.Parameter(torch.zeros(num_experts, 1, self.dim))
+        # self.W = nn.Parameter(torch.normal(0, 0.02, size=(num_experts, self.dim, self.dim)))
+        # self.b = nn.Parameter(torch.zeros(num_experts, 1, self.dim))
 
         self.store_memory_loss_fn = nn.MSELoss()
 
@@ -76,7 +77,9 @@ class TTTMoE(nn.Module):
         self,
         batch,
     ):
-        weights = repeat_dict_values(self.memory_model_parameter_dict, '... -> bh ...', bh = batch)
+        weights = repeat_dict_values(
+            self.memory_model_parameter_dict, "... -> bh ...", bh=batch
+        )
         return weights
 
     def forward(self, X):
@@ -86,9 +89,10 @@ class TTTMoE(nn.Module):
         keys = self.to_keys(X)
 
         grads, unweighted_mem_model_loss = self.per_sample_grad_fn(
-            dict(weights), keys, keys, keys 
+            dict(weights), keys, keys, keys
         )
         return grads, unweighted_mem_model_loss
+
 
 if __name__ == "__main__":
     model = TTTMoE()

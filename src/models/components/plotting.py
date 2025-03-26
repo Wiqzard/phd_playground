@@ -33,9 +33,9 @@ def plot_scatter_and_flow(obs, model, title="stream", wandb_logger=None):
     gridpoints = torch.tensor(
         np.stack([X.flatten(), Y.flatten()], axis=1), requires_grad=True, device=device
     ).type(torch.float32)
-    times = torch.tensor(T.flatten(), requires_grad=True, device=device).type(torch.float32)[
-        :, None
-    ]
+    times = torch.tensor(T.flatten(), requires_grad=True, device=device).type(
+        torch.float32
+    )[:, None]
     out = model(times, gridpoints)
     out = out.reshape([points_real, points_real, 7, dim])
     out = out.cpu().detach().numpy()
@@ -60,7 +60,9 @@ def plot_scatter_and_flow(obs, model, title="stream", wandb_logger=None):
         wandb_logger.log_image(key="flow", images=[f"figs/{title}.png"])
 
 
-def store_trajectories(obs: Union[torch.Tensor, list], model, title="trajs", start_time=0):
+def store_trajectories(
+    obs: Union[torch.Tensor, list], model, title="trajs", start_time=0
+):
     n = 2000
     if isinstance(obs, list):
         data, labels = [], []
@@ -116,7 +118,9 @@ def plot_trajectory(
         obs = obs.reshape(-1, dim).detach().cpu().numpy()
         tts = np.tile(np.arange(ts), batch_size)
         scprep.plot.scatter2d(obs, c=tts)
-    plt.scatter(traj[:, :n, 0], traj[:, :n, 1], s=0.3, alpha=0.2, c="black", label="Flow")
+    plt.scatter(
+        traj[:, :n, 0], traj[:, :n, 1], s=0.3, alpha=0.2, c="black", label="Flow"
+    )
     plt.scatter(traj[-1, :n, 0], traj[-1, :n, 1], s=6, alpha=1, c="purple", marker="x")
     for i in range(20):
         plt.plot(traj[:, i, 0], traj[:, i, 1], c="red", alpha=0.5)
@@ -158,10 +162,14 @@ def plot_paths(
 
     with torch.no_grad():
         node = NeuralODE(model)
-        traj = node.trajectory(start, t_span=torch.linspace(0, ts - 1, max(20 * ts, 100)))
+        traj = node.trajectory(
+            start, t_span=torch.linspace(0, ts - 1, max(20 * ts, 100))
+        )
         traj = traj.cpu().detach().numpy()
     # plt.scatter(traj[0, :n, 0], traj[0, :n, 1], s=10, alpha=0.8, c="black")
-    plt.scatter(traj[:, :n, 0], traj[:, :n, 1], s=0.3, alpha=0.2, c="black", label="Flow")
+    plt.scatter(
+        traj[:, :n, 0], traj[:, :n, 1], s=0.3, alpha=0.2, c="black", label="Flow"
+    )
     plt.scatter(traj[-1, :n, 0], traj[-1, :n, 1], s=6, alpha=1, c="purple", marker="x")
     # plt.legend(["Prior sample z(S)", "Flow", "z(0)"])
     os.makedirs("figs", exist_ok=True)

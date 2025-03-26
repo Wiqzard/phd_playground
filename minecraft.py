@@ -9,5 +9,3 @@ if __name__ == "__main__":
     dataset = hydra.utils.instantiate(cfg)
     sample = dataset[0]
     print(0)
-
-

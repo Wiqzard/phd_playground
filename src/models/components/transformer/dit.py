@@ -19,7 +19,8 @@ from einops import rearrange
 from timm.models.vision_transformer import Mlp, PatchEmbed, Attention
 
 from src.models.components.embedding.rotary_emb import get_nd_rotary_pos_embed
-#from src.models.components.transformer.attention import Attention
+
+# from src.models.components.transformer.attention import Attention
 
 
 def modulate(x, shift, scale):
@@ -58,12 +59,16 @@ class TimestepEmbedder(nn.Module):
         # https://github.com/openai/glide-text2im/blob/main/glide_text2im/nn.py
         half = dim // 2
         freqs = torch.exp(
-            -math.log(max_period) * torch.arange(start=0, end=half, dtype=torch.float32) / half
+            -math.log(max_period)
+            * torch.arange(start=0, end=half, dtype=torch.float32)
+            / half
         ).to(device=t.device)
         args = t[:, None].float() * freqs[None]
         embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
         if dim % 2:
-            embedding = torch.cat([embedding, torch.zeros_like(embedding[:, :1])], dim=-1)
+            embedding = torch.cat(
+                [embedding, torch.zeros_like(embedding[:, :1])], dim=-1
+            )
         return embedding
 
     def forward(self, t):
@@ -80,7 +85,9 @@ class LabelEmbedder(nn.Module):
     def __init__(self, num_classes, hidden_size, dropout_prob):
         super().__init__()
         use_cfg_embedding = dropout_prob > 0
-        self.embedding_table = nn.Embedding(num_classes + use_cfg_embedding, hidden_size)
+        self.embedding_table = nn.Embedding(
+            num_classes + use_cfg_embedding, hidden_size
+        )
         self.num_classes = num_classes
         self.dropout_prob = dropout_prob
 
@@ -89,7 +96,9 @@ class LabelEmbedder(nn.Module):
         Drops labels to enable classifier-free guidance.
         """
         if force_drop_ids is None:
-            drop_ids = torch.rand(labels.shape[0], device=labels.device) < self.dropout_prob
+            drop_ids = (
+                torch.rand(labels.shape[0], device=labels.device) < self.dropout_prob
+            )
         else:
             drop_ids = force_drop_ids == 1
         labels = torch.where(drop_ids, self.num_classes, labels)
@@ -116,8 +125,10 @@ class DiTBlock(nn.Module):
     def __init__(self, hidden_size, num_heads, mlp_ratio=4.0, **block_kwargs):
         super().__init__()
         self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.attn = Attention(hidden_size, num_heads=num_heads, qkv_bias=True, **block_kwargs)
-        
+        self.attn = Attention(
+            hidden_size, num_heads=num_heads, qkv_bias=True, **block_kwargs
+        )
+
         self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
 
@@ -125,18 +136,25 @@ class DiTBlock(nn.Module):
             return nn.GELU(approximate="tanh")
 
         self.mlp = Mlp(
-            in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0
+            in_features=hidden_size,
+            hidden_features=mlp_hidden_dim,
+            act_layer=approx_gelu,
+            drop=0,
         )
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(), nn.Linear(hidden_size, 6 * hidden_size, bias=True)
         )
 
     def forward(self, x, c, freq_cis=None):
-        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(
-            c
-        ).chunk(6, dim=1)
-        x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
-        x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
+        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
+            self.adaLN_modulation(c).chunk(6, dim=1)
+        )
+        x = x + gate_msa.unsqueeze(1) * self.attn(
+            modulate(self.norm1(x), shift_msa, scale_msa)
+        )
+        x = x + gate_mlp.unsqueeze(1) * self.mlp(
+            modulate(self.norm2(x), shift_mlp, scale_mlp)
+        )
         return x
 
 
@@ -148,7 +166,9 @@ class FinalLayer(nn.Module):
     def __init__(self, hidden_size, patch_size, out_channels):
         super().__init__()
         self.norm_final = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.linear = nn.Linear(hidden_size, patch_size * patch_size * out_channels, bias=True)
+        self.linear = nn.Linear(
+            hidden_size, patch_size * patch_size * out_channels, bias=True
+        )
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(), nn.Linear(hidden_size, 2 * hidden_size, bias=True)
         )
@@ -193,19 +213,22 @@ class DiT(nn.Module):
         self.max_frames = max_frames
         self.attention_mode = attention_mode
 
-        self.x_embedder = PatchEmbed(input_size, patch_size, in_channels, hidden_size, bias=True)
-        #self.t_embedder = TimestepEmbedder(hidden_size)
+        self.x_embedder = PatchEmbed(
+            input_size, patch_size, in_channels, hidden_size, bias=True
+        )
+        # self.t_embedder = TimestepEmbedder(hidden_size)
 
         self.t_embedder = StochasticTimeEmbedding(
             dim=self.noise_level_dim,
             time_embed_dim=self.noise_level_emb_dim,
-            use_fourier=False
+            use_fourier=False,
         )
         self.external_cond_embedding = self._build_external_cond_embedding()
 
-
         if num_classes > 0:
-            self.y_embedder = LabelEmbedder(num_classes, hidden_size, class_dropout_prob)
+            self.y_embedder = LabelEmbedder(
+                num_classes, hidden_size, class_dropout_prob
+            )
         else:
             self.y_embedder = None
 
@@ -219,7 +242,9 @@ class DiT(nn.Module):
         self.blocks = nn.ModuleList(
             [
                 DiTBlock(
-                    hidden_size, num_heads, mlp_ratio=mlp_ratio #, attention_mode=attention_mode
+                    hidden_size,
+                    num_heads,
+                    mlp_ratio=mlp_ratio,  # , attention_mode=attention_mode
                 )
                 for _ in range(depth)
             ]
@@ -338,13 +363,19 @@ class DiT(nn.Module):
         y: (N,) tensor of class labels
         """
         is_temporal = x.ndim == 5  # Check if input has temporal dimension
-        f = x.shape[2] if is_temporal else 1  # Temporal length (F), default to 1 if not temporal
+        f = (
+            x.shape[2] if is_temporal else 1
+        )  # Temporal length (F), default to 1 if not temporal
 
         if is_temporal:
             n, c, f, h, w = x.shape
-            x = rearrange(x, "n c t h w -> (n t) c h w")  # Combine batch and temporal dimensions
+            x = rearrange(
+                x, "n c t h w -> (n t) c h w"
+            )  # Combine batch and temporal dimensions
             x = self.x_embedder(x)
-            x = rearrange(x, "(n f) s d -> n (f s) d", f=f, s=self.x_embedder.num_patches, n=n)
+            x = rearrange(
+                x, "(n f) s d -> n (f s) d", f=f, s=self.x_embedder.num_patches, n=n
+            )
         else:
             x = self.x_embedder(x)
 
@@ -358,7 +389,9 @@ class DiT(nn.Module):
         if self.y_embedder is not None:
             y = self.y_embedder(y, self.training)  # Embed class labels
 
-        c = t + y if y.shape[-1] == t.shape[-1] else t  # Combine timestep and class embeddings
+        c = (
+            t + y if y.shape[-1] == t.shape[-1] else t
+        )  # Combine timestep and class embeddings
 
         for block in self.blocks:
             x = block(x, c)  # Process through transformer blocks
@@ -368,12 +401,16 @@ class DiT(nn.Module):
             return x
 
         if is_temporal:
-            x = rearrange(x, "n (f s) d -> (n f) s d", f=f, s=self.x_embedder.num_patches)
+            x = rearrange(
+                x, "n (f s) d -> (n f) s d", f=f, s=self.x_embedder.num_patches
+            )
 
         x = self.unpatchify(x)  # Convert back to spatial dimensions
 
         if is_temporal:
-            x = rearrange(x, "(n f) d h w -> n d f h w", f=f)  # Restore temporal dimension
+            x = rearrange(
+                x, "(n f) d h w -> n d f h w", f=f
+            )  # Restore temporal dimension
 
         return x
 
@@ -402,7 +439,9 @@ class DiT(nn.Module):
 # https://github.com/facebookresearch/mae/blob/main/util/pos_embed.py
 
 
-def get_3d_sincos_pos_embed(embed_dim, grid_size, depth_size, cls_token=False, extra_tokens=0):
+def get_3d_sincos_pos_embed(
+    embed_dim, grid_size, depth_size, cls_token=False, extra_tokens=0
+):
     """
     Generate 3D sine-cosine positional embeddings.
 
@@ -432,7 +471,9 @@ def get_3d_sincos_pos_embed(embed_dim, grid_size, depth_size, cls_token=False, e
 
     # Add [CLS] token or extra tokens if required
     if cls_token and extra_tokens > 0:
-        pos_embed = np.concatenate([np.zeros([extra_tokens, embed_dim]), pos_embed], axis=0)
+        pos_embed = np.concatenate(
+            [np.zeros([extra_tokens, embed_dim]), pos_embed], axis=0
+        )
 
     return pos_embed
 
@@ -475,7 +516,9 @@ def get_2d_sincos_pos_embed(embed_dim, grid_size, cls_token=False, extra_tokens=
     grid = grid.reshape([2, 1, grid_size, grid_size])
     pos_embed = get_2d_sincos_pos_embed_from_grid(embed_dim, grid)
     if cls_token and extra_tokens > 0:
-        pos_embed = np.concatenate([np.zeros([extra_tokens, embed_dim]), pos_embed], axis=0)
+        pos_embed = np.concatenate(
+            [np.zeros([extra_tokens, embed_dim]), pos_embed], axis=0
+        )
     return pos_embed
 
 

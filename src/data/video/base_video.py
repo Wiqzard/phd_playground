@@ -54,14 +54,17 @@ class BaseVideoDataset(torch.utils.data.Dataset, ABC):
         self.split = split
         self.save_dir = Path(save_dir)
 
-        if isinstance(resolution, int):
-            resolution = (resolution, resolution)
+        #if isinstance(resolution, int):
+        #    resolution = (resolution, resolution)
+        #self.latent_resolution = (
+        #    resolution[0] // latent_downsampling_factor[1],
+        #    resolution[1] // latent_downsampling_factor[1],
+        #)
 
         self.resolution = resolution
 
         # Compute latent resolution from factor
-        #self.latent_resolution = resolution // latent_downsampling_factor[1]
-        self.latent_resolution = (resolution[0] // latent_downsampling_factor[1], resolution[1] // latent_downsampling_factor[1])
+        self.latent_resolution = resolution // latent_downsampling_factor[1]
 
         # Build a path for latents, e.g., mydata_latent_32_suffix
         suffix_str = f"_{latent_suffix}" if latent_suffix else ""
@@ -112,7 +115,9 @@ class BaseVideoDataset(torch.utils.data.Dataset, ABC):
             for batch in dl:
                 pbar.update(1)
                 batch_pts, batch_fps = list(zip(*batch))
-                batch_pts = [torch.as_tensor(pts, dtype=torch.long) for pts in batch_pts]
+                batch_pts = [
+                    torch.as_tensor(pts, dtype=torch.long) for pts in batch_pts
+                ]
                 video_pts.extend(batch_pts)
                 video_fps.extend(batch_fps)
 
@@ -134,9 +139,7 @@ class BaseVideoDataset(torch.utils.data.Dataset, ABC):
         """
         before_len = len(metadata)
         metadata = [
-            video_metadata
-            for video_metadata in metadata
-            if filter_fn(video_metadata)
+            video_metadata for video_metadata in metadata if filter_fn(video_metadata)
         ]
         after_len = len(metadata)
         rank_zero_print(
@@ -170,9 +173,7 @@ class BaseVideoDataset(torch.utils.data.Dataset, ABC):
         """Apply an augment_fn to each item of metadata and flatten the results."""
         before_len = len(metadata)
         metadata = [
-            aug_item
-            for video_md in metadata
-            for aug_item in augment_fn(video_md)
+            aug_item for video_md in metadata for aug_item in augment_fn(video_md)
         ]
         after_len = len(metadata)
         rank_zero_print(
@@ -184,7 +185,9 @@ class BaseVideoDataset(torch.utils.data.Dataset, ABC):
 
     def load_metadata(self) -> List[Dict[str, Any]]:
         """Load pre-saved metadata file for the current split."""
-        metadata = torch.load(self.metadata_dir / f"{self.split}.pt", weights_only=False)
+        metadata = torch.load(
+            self.metadata_dir / f"{self.split}.pt", weights_only=False
+        )
         return [
             {key: metadata[key][i] for key in metadata.keys()}
             for i in range(len(metadata["video_paths"]))
@@ -196,7 +199,8 @@ class BaseVideoDataset(torch.utils.data.Dataset, ABC):
 
     def build_transform(self) -> Callable[[torch.Tensor], torch.Tensor]:
         """Build a transform (e.g. resize) that is applied to each video frame."""
-        return VideoTransform(self.resolution)
+        return VideoTransform((self.resolution, self.resolution))
+        #return VideoTransform(self.resolution)
 
     def video_metadata_to_latent_path(self, video_metadata: Dict[str, Any]) -> Path:
         """
@@ -313,11 +317,9 @@ class BaseAdvancedVideoDataset(BaseVideoDataset):
         latent_suffix: str = "",
         split: SPLIT = "training",
         current_epoch: Optional[int] = None,
-
         # "latent" group
         latent_enable: bool = False,
         latent_type: str = "pre_sample",
-
         # other config values
         external_cond_dim: int = 4,
         external_cond_stack: bool = True,
@@ -342,9 +344,7 @@ class BaseAdvancedVideoDataset(BaseVideoDataset):
         self.latent_type = latent_type
 
         # If latents are preprocessed, we check that the folder exists
-        self.use_preprocessed_latents = (
-            latent_enable and latent_type.startswith("pre_")
-        )
+        self.use_preprocessed_latents = latent_enable and latent_type.startswith("pre_")
         if self.use_preprocessed_latents and not self.latent_dir.exists():
             raise ValueError(
                 f"You requested preprocessed latents, but {self.latent_dir} does not exist."
@@ -409,10 +409,7 @@ class BaseAdvancedVideoDataset(BaseVideoDataset):
         Precompute how many sub-clips each video can yield, and build self.idx_remap.
         """
         num_clips = torch.as_tensor(
-            [
-                max(self.video_length(md) - self.n_frames + 1, 1)
-                for md in self.metadata
-            ]
+            [max(self.video_length(md) - self.n_frames + 1, 1) for md in self.metadata]
         )
         self.cumulative_sizes = num_clips.cumsum(0).tolist()
         self.idx_remap = self._build_idx_remap()
@@ -452,7 +449,9 @@ class BaseAdvancedVideoDataset(BaseVideoDataset):
 
         elif self.use_evaluation_subdataset:
             # Deterministically choose exactly one clip per video, then shuffle
-            if self.num_eval_videos and self.num_eval_videos > len(self.cumulative_sizes):
+            if self.num_eval_videos and self.num_eval_videos > len(
+                self.cumulative_sizes
+            ):
                 rank_zero_print(
                     cyan(
                         f"Fewer total videos ({len(self.cumulative_sizes)}) than requested "
@@ -462,7 +461,9 @@ class BaseAdvancedVideoDataset(BaseVideoDataset):
             random.seed(0)
             # pick exactly one clip from each video
             idx_remap = []
-            for start, end in zip([0] + self.cumulative_sizes[:-1], self.cumulative_sizes):
+            for start, end in zip(
+                [0] + self.cumulative_sizes[:-1], self.cumulative_sizes
+            ):
                 idx_remap.append(random.randrange(start, end))
             random.shuffle(idx_remap)
             return idx_remap[: self.num_eval_videos]
@@ -576,7 +577,9 @@ class BaseAdvancedVideoDataset(BaseVideoDataset):
         else:
             # load video (and cond if relevant)
             if self.external_cond_dim > 0:
-                video, cond = self.load_video_and_cond(video_metadata, start_frame, end_frame)
+                video, cond = self.load_video_and_cond(
+                    video_metadata, start_frame, end_frame
+                )
             else:
                 video = self.load_video(video_metadata, start_frame, end_frame)
 
