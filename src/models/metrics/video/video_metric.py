@@ -156,6 +156,7 @@ class VideoMetric(nn.Module):
         """
         # NOTE: Due to the large memory consumption of video metrics (especially VBench and LPIPS),
         # we split the batch into smaller chunks and update metrics for each chunk.
+
         preds_split = preds.chunk(self.split_batch_size, dim=0)
         target_split = target.chunk(self.split_batch_size, dim=0)
         assert len(preds_split) == len(
@@ -234,7 +235,9 @@ class VideoMetric(nn.Module):
 
         # call compute() for VBench metrics and reorganize the results
         for metric_type, module in self._filtered_items(self.VBENCH_METRICS):
+            print(f"Computing {prefix}/{metric_type}...")
             output = module.compute()
+            print(f"Finished computing {prefix}/{metric_type}...")
             dict_metrics.update(
                 {
                     f"{prefix}/{metric_type}/{key}": value
@@ -245,17 +248,40 @@ class VideoMetric(nn.Module):
             # if we need a functionality to log VBench several times within a single validation epoch,
             # we should move reset() to on_validation_epoch_end() in the Lightning module that uses this VideoMetric
             module.reset()
+                    # other metrics (no need to call compute())
+        #dict_metrics.update(
+        #    {
+        #        f"{prefix}/{metric_type}": module
+        #        for metric_type, module in self._filtered_items(
+        #            self.VBENCH_METRICS, not_in=True
+        #        )
+        #        if not (hasattr(module, "is_empty") and module.is_empty)
+        #    }
+        #)
 
-        # other metrics (no need to call compute())
-        dict_metrics.update(
-            {
-                f"{prefix}/{metric_type}": module
-                for metric_type, module in self._filtered_items(
-                    self.VBENCH_METRICS, not_in=True
-                )
-                if not (hasattr(module, "is_empty") and module.is_empty)
-            }
+#-----
+#-----
+#-----
+#-----
+#-----
+        other_metrics = (
+            self.VIDEO_WISE_METRICS.union(self.FRAME_WISE_METRICS, self.I3D_DEPENDENT_METRICS)
+            - self.VBENCH_METRICS
         )
+        
+        for metric_type, module in self._filtered_items(other_metrics):
+            if hasattr(module, "is_empty") and module.is_empty:
+                continue
+            print(f"Computing {prefix}/{metric_type}...")
+            value = module.compute()
+            print(f"Finished computing {prefix}/{metric_type}.")
+            dict_metrics[f"{prefix}/{metric_type}"] = value
+            module.reset()
+#-----
+#-----
+#-----
+#-----
+
 
         return dict_metrics
 

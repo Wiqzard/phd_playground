@@ -4,16 +4,16 @@ defaults:
   - override /data: minecraft_marsh #memory_test
   - override /model: ddpm_video
   - override /callbacks: default
-  - override /trainer: gpu
-  #- override /trainer:  ddp 
+  #- override /trainer: gpu
+  - override /trainer:  ddp 
   - override /logger: wandb
   - override /paths: default
-  #- override /debug: overfit
+  #- override /debug: profiler #advanced #overfit
 
 # all parameters below will be merged with parameters from default configurations set above
 # this allows you to overwrite only specified parameters
 
-tags: ["ddpm", "debug", "memory_maze"]
+tags: ["ddpm", "debug", "minecraft"]
 
 seed: 42 
 test: False
@@ -24,30 +24,41 @@ trainer:
   strategy: ddp_find_unused_parameters_true
   inference_mode: False
   min_epochs: 10
-  max_epochs: 1000
+  #max_epochs: 1000
   gradient_clip_val: 1 
-  val_check_interval: 30 #500 #00 #0 #500 
-  devices: 2
+  val_check_interval: 300 #500 #00 #0 #500 
+  devices: 4 
   check_val_every_n_epoch:  #5
-  #limit_train_batches: 1
+  limit_train_batches: 400
   limit_val_batches: 1 #20
   log_every_n_steps: 1
   num_sanity_val_steps: 1
   #overfit_batches: 1
-  precision: #bf16-mixed #null #fp32 #bf16-mixed
+  precision: bf16 #bf16-mixed #fp32 #fp16
+  profiler: "advanced"
+  max_epochs: 1
+  deterministic: False
+
+
+
 
 #paths:
 #  data_dir: /data/cvg/sebastian/memory_maze/memory-maze-9x9 
   
 #ckpt_path: logs/train/runs/2025-02-21_22-04-15/checkpoints/last.ckpt  # null
 data:
-  batch_size: 16 #64 #16 #8 #16 #32 #1 #32 #32 #64 
-  num_workers: 32 #16
+  batch_size: 4 # 16 #64 #16 #8 #16 #32 #1 #32 #32 #64 
+  num_workers: 16
   dataset_cls:
-    n_frames: 9 #10 #5 #25 #5
-    max_frames: 9 #5 # 25 #5
+    n_frames: 10 #25 #12 #18 #10 #5 #25 #5
+    max_frames: 10 #25 #12 #18 #5 # 25 #5
     context_length: 1 #5 #25 #5
-    latent_downsampling_factor: [1, 1]
+    save_dir: /data/cvg/sebastian/minecraft_marsh 
+    latent_enable: True  #False  # Whether to use latents
+    latent_type: pre_sample  # Type of how latents are computed
+    latent_suffix: 1cd9pgpb
+    latent_downsampling_factor: [1, 8]  # [temporal, spatial]
+    #observation_shape: [4, 32, 32]
 
 model:
   ckpt_path: #logs/train/runs/2025-03-16_19-48-49/checkpoints/last.ckpt #null #logs/train/runs/2025-02-21_22-04-15/checkpoints/last.ckpt  # null
@@ -59,42 +70,44 @@ model:
   data_std: ${data.dataset_cls.data_mean} 
 
   # VAE Configuration
-  is_latent_diffusion: False
-  is_latent_online: False
-  latent_downsampling_factor: [1, 1]
+  is_latent_diffusion: True #False
+  is_latent_online: False #True #False
+  latent_downsampling_factor: ${data.dataset_cls.latent_downsampling_factor}
   latent_num_channels: 4
-  vae_pretrained_path: 
+  vae_pretrained_path: data/ckpts/ImageVAE_MCRAFT.ckpt
   vae_use_fp16: False
-  vae_vae_pretrained_kwargs: {}
+  vae_batch_size: 2
+  vae_pretrained_kwargs: {}
 
 
   # Metrics Configuration
-  metrics: [mse, psnr, ssim] #[fvd, is, fid, lpips, mse, psnr, ssim]
-  metrics_batch_size: 16
+  metrics: [mse, psnr, ssim, fid] #, fvd] #[fvd, is, fid, lpips, mse, psnr, ssim, vbench]
+  metrics_batch_size: 8 
   n_metrics_frames: #null # 50
 
   # Checkpoint
   strict_load: False
+  reset_optimizer: False
 
   # Logging Configuration
-  log_grad_norm_freq: 0 #100 #${trainer.log_every_n_steps}
+  log_grad_norm_freq: 100 #100 #${trainer.log_every_n_steps}
   log_deterministic: False
   log_sanity_generation: True #True #False
   log_max_num_videos: 128 #64 #16 #32
-  log_fps: 2
+  log_fps: 6
 
 
   # General Configuration
   x_shape: ${data.dataset_cls.observation_shape}
   n_frames: ${data.dataset_cls.n_frames} # Number of frames to be used for generating videos 
   max_frames: ${data.dataset_cls.max_frames} # ... during training
-  attention_window_size: 3
+  attention_window_size: 10 #2
   context_frames: ${data.dataset_cls.context_length} # number of context frames
 
   # Generation Configuration
   sliding_context_len: 0  # if 0 only first iteration has context_frames
   #context_frames_in_autoregressive_prediction: 0 # the amount of context frames to be used in autoregressive prediction (after the first iteration)
-  sampling_timesteps: 5
+  sampling_timesteps: 20
   cat_context_in_c_dim: True
   generate_in_noise_dim: False #True #True #True
 
@@ -121,16 +134,16 @@ model:
   tasks: [prediction,] #, interpolation]
   diffusion_model:
     _partial_: true
-    _target_: src.models.components.diffusion.DiscreteDiffusion #ContinuousDiffusion  # DiscreteDiffusion
+    _target_: src.models.components.diffusion.ContinuousDiffusion #DiscreteDiffusion #ContinuousDiffusion  # DiscreteDiffusion
     model: 
       _target_: insert_memory.MemoryDiT3D 
-      x_shape: ${data.dataset_cls.observation_shape}
+      x_shape: [4, 32, 32 ] #${data.dataset_cls.observation_shape}
       cat_conditioning: ${model.cat_context_in_c_dim}
       max_tokens: ${model.attention_window_size} #${data.max_frames}
       hidden_size: 192
-      patch_size: 4
+      patch_size: 2
       variant: full
-      pos_emb_type: sinusoidal_1d #learned_1d # rope_3d #learned_3d
+      pos_emb_type: rope_3d #sinusoidal_1d #learned_1d # rope_3d #learned_3d
       depth: 12
       num_heads: 4
       mlp_ratio: 4
@@ -138,11 +151,18 @@ model:
       use_fourier_noise_embedding: False
       external_cond_dropout: 0.0
       learn_sigma: False
-      chunk_size: 256
-      batch_size: 256
-      depth_memory: 2
-      memory_layer_indices: [1, 5, 9]
-      momentum: False #True
+      memory_cfg:
+#        model_type: #titans
+#        chunk_size: 4 #256
+#        batch_size: 25
+#        depth_memory: 2
+#        heads: 1
+#        dim_head: #96
+#        memory_layer_indices: [1, 5, 9]
+#        momentum: False #True
+#        qkv_receives_diff_views: False
+#        max_grad_norm: 10
+
     #x_shape: ${data.observation_shape}
       external_cond_dim: 8 #${model.external_cond_dim}
 
@@ -173,6 +193,19 @@ model:
     ## memory settings
     #batch_size: 256 #32 #64 #128 # actual splitting
     #chunk_size: 256 
+    #memory_cfg:
+    #_target_: titans.titans_pytorch.ttt_custom.TTTConfig
+      #pre_conv: False
+      #hidden_size: hidden_size
+      #ttt_layer_type="mlp"
+      #num_attention_heads=4
+      #mini_batch_size=256
+      ## rms_norm_eps=
+      ## conv_kernel=
+      ## mamba setting
+      #use_gate=False
+      #share_qk=False
+      #use_cache=True,  # enabling caching is optional
 
 
   optimizer:
@@ -182,17 +215,22 @@ model:
     weight_decay: 0.001
 
   lr_scheduler:
-    _target_: torch.optim.lr_scheduler.LinearLR
+    _target_: transformers.get_scheduler #get_constant_schedule_with_warmup
     _partial_: true
-    start_factor: 1 
-    end_factor: 0.1
-    total_iters: ${trainer.max_epochs}
+    name: constant_with_warmup
+    num_warmup_steps: 300
+    num_training_steps: 100000
+    #_target_: torch.optim.lr_scheduler.LinearLR
+    #_partial_: true
+    #start_factor: 1 
+    #end_factor: 0.1
+    #total_iters: ${trainer.max_epochs}
 
 callbacks:
   ema:
     enabled: true
     decay: 0.9999
-    validate_original_weights: True
+    validate_original_weights: False #True
     
   early_stopping:
     #monitor: "val/loss"
@@ -206,6 +244,11 @@ callbacks:
     #monitor: "val/loss"
     monitor: "prediction/VideoMetricType.MSE"
     mode: "min"
+  
+  learning_rate_monitor:
+    logging_interval: 'step' 
+    log_momentum: true
+    log_weight_decay: true
   
 
 logger:

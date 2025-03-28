@@ -2,7 +2,7 @@
 
 defaults:
   #- override /callbacks: default
-  - override /trainer:  ddp #gpu
+  - override /trainer: ddp #gpu
   - override /logger: wandb
   - override /paths: default
 #  - override /model: overfit
@@ -23,11 +23,11 @@ trainer:
 
 data:
   _target_: src.data.datamodule_factory.DataModuleFactory
-  batch_size: 2 #16
+  batch_size: 1 #16
   num_workers: 16
   pin_memory: False 
   shuffle: False
-  overwrite_split: training
+  overwrite_split: #training
   dataset_cls:
     _target_: src.data.video.minecraft_marsh.MinecraftSimpleVideoDataset
     _partial_: True

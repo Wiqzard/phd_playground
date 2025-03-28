@@ -1,4 +1,6 @@
 from types import SimpleNamespace
+import time
+from contextlib import nullcontext
 
 import torch
 import torch.nn as nn
@@ -7,6 +9,7 @@ from torch.utils.checkpoint import checkpoint
 from typing import Literal, Optional, Tuple, Callable, Union
 from timm.models.vision_transformer import PatchEmbed
 from einops import repeat, rearrange
+from functools import partial
 
 from titans.titans_pytorch.neural_memory import NeuralMemory
 from titans.titans_pytorch.memory_models import MemoryMLP
@@ -52,7 +55,7 @@ class DummyConfig:
         return self.__dict__.get(key, default)
 
 
-class MemoryBlock(nn.Module):
+class MemoryBlock2(nn.Module):
     def __init__(self, hidden_size, depth_memory=2):
         super().__init__()
         self.memory_layer = NeuralMemory(
@@ -98,11 +101,8 @@ class DiT3D(DiT):
         num_classes=1000,
         learn_sigma=False,
         out_channels=None,
-        chunk_size=16,
-        batch_size=None,
-        depth_memory=2,
-        qkv_receives_diff_views=False,
         max_frames=32,
+        memory_cfg=None,
     ):
         super().__init__(
             input_size,
@@ -123,20 +123,21 @@ class DiT3D(DiT):
         memory_slots = [1, 3, 5, 9]
         self.memory_layers = torch.nn.ModuleList([])
         for i in range(depth):
-            if i in memory_slots:
+            if i in memory_slots and memory_cfg is not None:
                 memory_layer = torch.nn.ModuleList(
                     [
                         NeuralMemory(
                             dim=hidden_size,
-                            # dim_head=96,
-                            momentum=False,
-                            chunk_size=chunk_size,
-                            batch_size=batch_size,
-                            model=MemoryMLP(dim=hidden_size, depth=depth_memory),
-                            # model=MemoryMLP(dim=96, depth=depth_memory),
-                            qkv_receives_diff_views=qkv_receives_diff_views,
+                            heads=memory_cfg.heads,
+                            dim_head=memory_cfg.dim_head,
+                            momentum=memory_cfg.momentum,
+                            chunk_size=memory_cfg.chunk_size,
+                            batch_size=memory_cfg.batch_size,
+                            model=MemoryMLP(dim=hidden_size, depth=memory_cfg.depth_memory),
+                            qkv_receives_diff_views=memory_cfg.qkv_receives_diff_views,
                             use_accelerated_scan=False,
                             default_step_transform_max_lr=1e-1,
+                            max_grad_norm=memory_cfg.max_grad_norm,
                         ),
                         nn.Sequential(
                             nn.SiLU(),
@@ -157,7 +158,7 @@ class DiT3D(DiT):
                 nn.init.constant_(modulation[-1].bias, 0.0)
 
     def forward(
-        self, x, timestep, cond=None, cache_params=None, use_cache=True, run=0
+        self, x, timestep, cond=None, cache_params=None, use_cache=True, run=0, ttt_lr_mult=1.0
     ):  # memory_states=None, return_memory=False):
         memory_states = default(cache_params, [])
         return_memory = True  # exists(cache_params)
@@ -197,9 +198,7 @@ class DiT3D(DiT):
                     print("retrieved has nan")
                 next_neural_mem_caches.append(memory_state)
                 shift, scale, gate = modulation(c).chunk(3, dim=-1)
-                x = x + retrieved * gate.unsqueeze(
-                    1
-                )  # * modulate(retrieved, shift, scale)
+                x = x + retrieved * gate.unsqueeze(1)  # * modulate(retrieved, shift, scale)
                 # x = x + retrieved  # gate.unsqueeze(1) * modulate(retrieved, shift, scale)
 
         x = self.final_layer(x, c)  # (N, T, patch_size ** 2 * out_channels)
@@ -233,11 +232,8 @@ class MemoryDiT3D(BaseBackbone):
         use_fourier_noise_embedding: bool = False,
         external_cond_dropout: float = 0.0,
         learn_sigma: bool = False,
-        chunk_size: int = 16,
-        batch_size: int = 16,
-        depth_memory: int = 2,
-        memory_layer_indices: list = None,  # [1, 3, 5, 9],
-        momentum: bool = True,
+        memory_layer_indices: list[int] = None,
+        memory_cfg: SimpleNamespace = None,
     ):
 
         self.hidden_size = hidden_size
@@ -251,16 +247,15 @@ class MemoryDiT3D(BaseBackbone):
             use_fourier_noise_embedding=use_fourier_noise_embedding,
             external_cond_dropout=external_cond_dropout,
         )
-        if memory_layer_indices is None:
-            memory_layer_indices = []
+        self.memory_layer_indices = memory_layer_indices #memory_cfg.memory_layer_indices if memory_cfg is not None else None
+        if self.memory_layer_indices is None:
+            self.memory_layer_indices = []
 
         channels, resolution, *_ = x_shape
         self.cat_conditioning = cat_conditioning
         if cat_conditioning:
             channels = channels * 2
-        assert (
-            resolution % self.patch_size == 0
-        ), "Resolution must be divisible by patch size."
+        assert resolution % self.patch_size == 0, "Resolution must be divisible by patch size."
 
         self.num_patches = (resolution // self.patch_size) ** 2
         out_channels = self.patch_size**2 * channels
@@ -331,9 +326,7 @@ class MemoryDiT3D(BaseBackbone):
                 DiTBlock(
                     hidden_size=hidden_size,
                     num_heads=num_heads,
-                    mlp_ratio=(
-                        mlp_ratio if self.variant != "factorized_attention" else None
-                    ),
+                    mlp_ratio=(mlp_ratio if self.variant != "factorized_attention" else None),
                     rope=rope if self.pos_emb_type == "rope_3d" else None,
                 )
                 for _ in range(depth)
@@ -344,26 +337,45 @@ class MemoryDiT3D(BaseBackbone):
         #    max(memory_layer_indices) < depth
         # ), f"Memory slots must be less than the depth of the model ({depth}) but got {memory_slots}"
 
-        self.memory_layer_indices = memory_layer_indices
         self.memory_layers = torch.nn.ModuleList([])
+
+        self.memory_model_type = None
+        if memory_cfg is not None:
+            self.memory_model_type = memory_cfg.model_type
+            match memory_cfg.model_type:
+                case "titans":
+                    memory_cls = partial(NeuralMemory, hidden_size=hidden_size)
+                case "ttt":
+                    memory_cls = partial(Block, config=memory_cfg)
+                    self.config = memory_cfg
+
         for i in range(depth):
-            if i in memory_layer_indices:
-                memory_layer = torch.nn.ModuleList(
-                    [
-                        NeuralMemory(
-                            dim=hidden_size,
-                            momentum=momentum,
-                            chunk_size=chunk_size,
-                            batch_size=batch_size,
-                            model=MemoryMLP(dim=hidden_size, depth=depth_memory),
-                            qkv_receives_diff_views=False,
-                            use_accelerated_scan=False,
-                            default_step_transform_max_lr=1e-1,
-                            max_grad_norm=1,
-                        ),
-                        AdaLayerNormZero(hidden_size),
-                    ]
-                )
+            if i in self.memory_layer_indices:
+                if memory_cfg.model_type == "titans":
+                    memory_layer = torch.nn.ModuleList(
+                        [
+                            NeuralMemory(
+                                dim=hidden_size,
+                                heads=memory_cfg.heads,
+                                dim_head=memory_cfg.dim_head,
+                                momentum=memory_cfg.momentum,
+                                chunk_size=memory_cfg.chunk_size,
+                                batch_size=memory_cfg.batch_size,
+                                model=MemoryMLP(dim=hidden_size, depth=memory_cfg.depth_memory),
+                                qkv_receives_diff_views=memory_cfg.qkv_receives_diff_views,
+                                use_accelerated_scan=False,
+                                default_step_transform_max_lr=1e-1,
+                                max_grad_norm=memory_cfg.max_grad_norm,
+                            ),
+                            AdaLayerNormZero(hidden_size),
+                        ]
+                    )
+                elif memory_cfg.model_type == "ttt":
+                    memory_layer = memory_cls(layer_idx=i)
+                    #torch.nn.ModuleList(
+                    #    [memory_cls(layer_idx=i), AdaLayerNormZero(hidden_size)]
+                    #)
+
                 self.memory_layers.append(memory_layer)
             else:
                 self.memory_layers.append(torch.nn.Identity())
@@ -389,9 +401,7 @@ class MemoryDiT3D(BaseBackbone):
         if self.num_patches is None:
             return None
         grid_size = int(self.num_patches**0.5)
-        assert (
-            grid_size * grid_size == self.num_patches
-        ), "num_patches must be a square number"
+        assert grid_size * grid_size == self.num_patches, "num_patches must be a square number"
         return grid_size
 
     @staticmethod
@@ -407,9 +417,7 @@ class MemoryDiT3D(BaseBackbone):
         }:
             raise ValueError(f"Unknown positional embedding type {pos_emb_type}")
         if num_patches is None:
-            assert (
-                variant == "full"
-            ), "For 1D inputs, factorized variants are not supported"
+            assert variant == "full", "For 1D inputs, factorized variants are not supported"
             assert pos_emb_type in {
                 "learned_1d",
                 "sinusoidal_1d",
@@ -423,57 +431,109 @@ class MemoryDiT3D(BaseBackbone):
             return checkpoint(module, *args, use_reentrant=False)
         return module(*args)
 
-    def _dit_forward(
-        self, x: torch.Tensor, c: torch.Tensor, cache_params=None
-    ) -> torch.Tensor:
+    def _dit_forward(self, x: torch.Tensor, c: torch.Tensor, cache_params=None, position_ids=None, profiler=None, ttt_lr_mult=1.0):
         memory_states = default(cache_params, [])
         aux_output = None
 
-        if x.size(1) > self.max_tokens:
-            raise ValueError(
-                f"Input sequence length {x.size(1)} exceeds the maximum length {self.max_tokens}"
-            )
+        seq_len = x.size(1)
         batch_size = x.size(0)
-        # 1) Absolute positional embeddings if needed
-        if self.is_pos_emb_absolute_once:
-            x = self.pos_emb(x)
 
-        # 2) Factorized absolute positional embeddings (non-factorized case)
+        if seq_len > self.max_tokens:
+            raise ValueError(
+                f"Input sequence length {seq_len} exceeds the maximum length {self.max_tokens}"
+            )
+
+        # Apply positional embeddings
+        with torch.profiler.record_function("positional_embeddings") if profiler else nullcontext():
+            if self.is_pos_emb_absolute_once:
+                x = self.pos_emb(x)
+
+
         if self.is_pos_emb_absolute_factorized and not self.is_factorized:
-            # Factor out space, then time, then refold:
-            # (b (t p) c) -> (b t) p c -> (b p) t c -> ...
-            def add_pos_emb(x: torch.Tensor, batch_size: int) -> torch.Tensor:
-                x = rearrange(x, "b (t p) c -> (b t) p c", p=self.num_patches)
-                x = self.spatial_pos_emb(x)
-                x = rearrange(x, "(b t) p c -> (b p) t c", b=batch_size)
-                x = self.temporal_pos_emb(x)
-                x = rearrange(x, "(b p) t c -> b (t p) c", b=batch_size)
-                return x
+            x = rearrange(x, "b (t p) c -> (b t) p c", p=self.num_patches)
+            x = self.spatial_pos_emb(x)
+            x = rearrange(x, "(b t) p c -> (b p) t c", b=batch_size)
+            x = self.temporal_pos_emb(x)
+            x = rearrange(x, "(b p) t c -> b (t p) c", b=batch_size)
 
-            x = add_pos_emb(x, batch_size)
-
-        neural_mem_caches = iter(default(memory_states, []))
+        # Initialize memory caches
+        neural_mem_caches = iter(memory_states)
         next_neural_mem_caches = []
-        for i, (block, memory_layer) in enumerate(
-            zip(self.blocks, self.memory_layers or [None for _ in range(self.depth)])
-        ):
-            x = self.checkpoint(block, x, c)
+
+        if self.memory_model_type == "ttt":
+            position_ids, attention_mask, neural_mem_caches = self._init_ttt_cache(
+                batch_size, position_ids, cache_params, x.device
+            )
+
+        # Main block loop
+        for i, block in enumerate(self.blocks or [None] * self.depth):
+            with torch.profiler.record_function(f"block_{i}") if profiler else nullcontext():
+                x = self.checkpoint(block, x, c)
 
             if i in self.memory_layer_indices:
-                memory_layer, norm = memory_layer
-                retrieved, memory_state, aux_output = memory_layer(
-                    x, state=next(neural_mem_caches, None), return_surprises=True
-                )
-                # memory_state)
-                if torch.isnan(retrieved).any():
-                    print("retrieved has nan")
-                next_neural_mem_caches.append(memory_state)
-                x, gate_memory = norm(x, c)
-                x = x + retrieved * gate_memory
+                if self.memory_model_type == "titans":
+                    with torch.profiler.record_function(f"titans_layer_{i}") if profiler else nullcontext():
+                        x, memory_state, aux_output = self._process_titans_layer(
+                            i, x, c, neural_mem_caches
+                        )
+                    next_neural_mem_caches.append(memory_state)
+                else:  # Default or TTT case
+                    with torch.profiler.record_function(f"memory_layer_{i}") if profiler else nullcontext():
+                        x, _ = self.memory_layers[i](
+                            x,
+                            attention_mask=attention_mask,
+                            position_ids=position_ids,
+                            cache_params=next(neural_mem_caches, None),
+                            ttt_lr_mult=ttt_lr_mult,
+                        )
+                    aux_output = None
 
-        x = self.final_layer(x, c)
+        with torch.profiler.record_function("final_layer") if profiler else nullcontext():
+            x = self.final_layer(x, c)
+
+        if self.memory_model_type == "ttt":
+            next_neural_mem_caches = neural_mem_caches
 
         return x, next_neural_mem_caches, aux_output
+
+    
+    def _init_ttt_cache(self, batch_size, position_ids, cache_params, device):
+        run = 0
+        if position_ids is None:
+            position_ids = torch.arange(
+                run * self.max_tokens,
+                (run + 1) * self.max_tokens,
+                dtype=torch.long,
+                device=device,
+            ).unsqueeze(0)
+
+        attention_mask = torch.ones_like(position_ids)
+
+        if cache_params is None:
+            neural_mem_caches = [
+                TTTCache(self, batch_size, device=device)
+                for _ in range(len(self.memory_layer_indices))
+            ]
+            for cache in neural_mem_caches:
+                cache.seqlen_offset = run * self.max_tokens
+        else:
+            neural_mem_caches = cache_params
+
+        return position_ids, attention_mask, iter(neural_mem_caches)
+
+
+    def _process_titans_layer(self, i, x, c, neural_mem_caches):
+        memory_layer, norm = self.memory_layers[i]
+        retrieved, memory_state, aux_output = memory_layer(
+            x, state=next(neural_mem_caches, None), return_surprises=True
+        )
+        if torch.isnan(retrieved).any():
+            print("Warning: retrieved contains NaNs")
+
+        x_normed, gate_memory = norm(x, c)
+        x = x_normed + retrieved * gate_memory
+        return x, memory_state, aux_output
+
 
     @property
     def in_channels(self) -> int:
@@ -529,6 +589,7 @@ class MemoryDiT3D(BaseBackbone):
         external_cond_mask: Optional[torch.Tensor] = None,
         neural_memory_cache=None,
         start_idx=0,
+        profiler=None,
     ) -> torch.Tensor:
         input_batch_size = x.shape[0]
         # Merge (B, T) into one dimension for patch embedding
@@ -544,7 +605,7 @@ class MemoryDiT3D(BaseBackbone):
 
         # Pass to DiTBase
         x, neural_memory_cache, aux_output = self._dit_forward(
-            x, emb, neural_memory_cache
+            x, emb, neural_memory_cache, profiler=profiler
         )  # (B, N, C)
 
         # Unpatchify
@@ -553,9 +614,7 @@ class MemoryDiT3D(BaseBackbone):
         )  # (B*T, H, W, C)
 
         # Reshape back to (B, T, ...)
-        x = rearrange(
-            x, "(b t) h w c -> b t c h w", b=input_batch_size
-        )  # (B, T, C, H, W)
+        x = rearrange(x, "(b t) h w c -> b t c h w", b=input_batch_size)  # (B, T, C, H, W)
         return x, neural_memory_cache, aux_output
 
 
@@ -715,9 +774,7 @@ class DiT3DTTT(DiT):
 
 
 if __name__ == "__main__":
-    model = DiT3DTTT(
-        depth=12, hidden_size=768, patch_size=8, num_heads=12, max_frames=16
-    ).cuda()
+    model = DiT3DTTT(depth=12, hidden_size=768, patch_size=8, num_heads=12, max_frames=16).cuda()
     # model = DiT3D(depth=12, hidden_size=768, patch_size=8, num_heads=12, max_frames=16).cuda()
     # print number of parameters
     print(sum(p.numel() for p in model.parameters() if p.requires_grad))

@@ -145,8 +145,8 @@ class MinecraftAdvancedVideoDataset(
 # Usage example
 if __name__ == "__main__":
     dataset = MinecraftSimpleVideoDataset(
-        save_dir="data",
-        resolution=64,
+        save_dir="/capstor/store/cscs/swissai/a03/ss24m050/minecraft_marsh",
+        resolution=256,
         latent_downsampling_factor=[1, 1, 1, 1],
         latent_suffix="",
         split="training",

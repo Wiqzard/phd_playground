@@ -154,7 +154,7 @@ def log_video(
         raw_dir = Path(raw_dir)
         raw_dir.mkdir(parents=True, exist_ok=True)
         observation_gt_np, observation_hat_np = map(
-            lambda x: (np.clip(x.detach().cpu().numpy(), a_min=0.0, a_max=1.0) * 255).astype(
+            lambda x: (np.clip(x.detach().cpu().float().numpy(), a_min=0.0, a_max=1.0) * 255).astype(
                 np.uint8
             ),
             (observation_gt, observation_hats[0]),
@@ -185,7 +185,7 @@ def log_video(
             observation_hat[:, context_frames, i, :, indices] = c
         observation_gt[:, :, i, [0, -1], :] = c
         observation_gt[:, :, i, :, [0, -1]] = c
-    video = torch.cat([*observation_hats, observation_gt], -1).detach().cpu().numpy()
+    video = torch.cat([*observation_hats, observation_gt], -1).detach().cpu().float().numpy()
 
     # reshape to original shape
     if n_frames is not None:

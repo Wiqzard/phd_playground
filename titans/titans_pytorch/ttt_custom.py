@@ -608,7 +608,7 @@ class TTTCache:
         )
         for layer_idx in iterator:
             for name in self.ttt_param_names:
-                weight = getattr(model.layers[layer_idx].seq_modeling_block, name)
+                weight = getattr(model.memory_layers[layer_idx].seq_modeling_block, name)
                 tiled_weight = torch.tile(
                     weight.unsqueeze(0), (batch_size,) + (1,) * weight.dim()
                 ).to(self.device)
@@ -945,7 +945,7 @@ class TTTBase(nn.Module):
         output = y * ttt_output
         return output
 
-    def get_ttt_inputs(self, inputs, mini_batch_size, cache_params):
+    def get_ttt_inputs(self, inputs, mini_batch_size, cache_params, ttt_lr_mult):
         XQ = inputs["XQ"]
         XK = inputs["XK"]
         XV = inputs["XV"]
@@ -970,7 +970,7 @@ class TTTBase(nn.Module):
         else:
             mini_batch_step_offset = 0
         token_eta, ttt_lr_eta = self.get_eta(X, mini_batch_step_offset, mini_batch_size)
-        eta = token_eta * ttt_lr_eta
+        eta = token_eta * ttt_lr_eta * ttt_lr_mult
         # decouple token_coeff and ilr_coeff for decoding
         inputs = {
             "XQ": XQ,
@@ -999,6 +999,7 @@ class TTTBase(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         cache_params: Optional[TTTCache] = None,
+        ttt_lr_mult: Optional[float] = 1.0,
     ):
         B, L = hidden_states.shape[:2]
         reminder_len = L % self.mini_batch_size
@@ -1031,7 +1032,7 @@ class TTTBase(nn.Module):
                 "X": hidden_states[:, : num_mini_batch * self.mini_batch_size],
             }
             output_mod, last_mini_batch_params_dict = self.ttt(
-                self.get_ttt_inputs(inputs, self.mini_batch_size, cache_params),
+                self.get_ttt_inputs(inputs, self.mini_batch_size, cache_params, ttt_lr_mult),
                 mini_batch_size=self.mini_batch_size,
                 last_mini_batch_params_dict=last_mini_batch_params_dict,
                 cache_params=cache_params,
@@ -1045,7 +1046,7 @@ class TTTBase(nn.Module):
                 "X": hidden_states[:, -reminder_len:],
             }
             output_reminder, _ = self.ttt(
-                self.get_ttt_inputs(inputs, reminder_len, cache_params),
+                self.get_ttt_inputs(inputs, reminder_len, cache_params, ttt_lr_mult),
                 mini_batch_size=reminder_len,
                 last_mini_batch_params_dict=last_mini_batch_params_dict,
                 cache_params=cache_params,
@@ -1058,7 +1059,9 @@ class TTTBase(nn.Module):
             output_hidden_states = self.apply_gate(hidden_states, output_hidden_states)
         output_hidden_states = self.o_proj(output_hidden_states)
 
-        return output_hidden_states
+        
+
+        return output_hidden_states, None
 
 
 class TTTLinear(TTTBase):
@@ -1308,6 +1311,9 @@ class TTTMoELinear(TTTBase):
             eta_mini_batch = inputs["eta"]
             token_eta_mini_batch = inputs["token_eta"]
             ttt_lr_eta_mini_batch = inputs["ttt_lr_eta"]
+
+            #num_experts = 8
+            #for i in range(num_experts):
 
             X1 = XK_mini_batch
             # [B,nh,K,f] @ [B,nh,f,f] -> [B,nh,K,f]
@@ -1800,6 +1806,7 @@ class Block(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         cache_params: Optional[TTTCache] = None,
+        ttt_lr_mult: Optional[float] = 1.0,
     ):
         if self.pre_conv:
             residual = hidden_states
@@ -1811,11 +1818,12 @@ class Block(nn.Module):
         hidden_states = self.seq_norm(hidden_states)
 
         # TTT Layer
-        hidden_states = self.seq_modeling_block(
+        hidden_states, _ = self.seq_modeling_block(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
             position_ids=position_ids,
             cache_params=cache_params,
+            ttt_lr_mult=ttt_lr_mult,
         )
         hidden_states = residual + hidden_states
 
@@ -1825,7 +1833,7 @@ class Block(nn.Module):
         hidden_states = self.mlp(hidden_states)
         hidden_states = residual + hidden_states
 
-        return hidden_states
+        return hidden_states, None
 
 
 class TTTPreTrainedModel(PreTrainedModel):

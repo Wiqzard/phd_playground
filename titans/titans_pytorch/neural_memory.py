@@ -620,9 +620,9 @@ class NeuralMemory(Module):
 
         # allow for neural memory of a previous layer to influence surprise of current layer
 
-        weights_for_surprise = repeat_dict_values(
-            weights, "b ... -> b n ...", n=num_chunks
-        )
+        #weights_for_surprise = repeat_dict_values(
+        #    weights, "b ... -> b n ...", n=num_chunks
+        #)
 
         # initial norm
 
@@ -674,18 +674,18 @@ class NeuralMemory(Module):
 
         # take care of chunking
 
-        keys, values = tuple(
-            rearrange(
-                t, "b h (n c u) d -> (b h n) (c u) d", c=chunk_size, u=num_updates
-            )
-            for t in (keys, values)
-        )
+        #keys, values = tuple(
+        #    rearrange(
+        #        t, "b h (n c u) d -> (b h n) (c u) d", c=chunk_size, u=num_updates
+        #    )
+        #    for t in (keys, values)
+        #)
 
         # adaptive lr
 
-        adaptive_lr = rearrange(
-            adaptive_lr, "b (n c u) -> (b n) (c u)", c=chunk_size, u=num_updates
-        )
+        #adaptive_lr = rearrange(
+        #    adaptive_lr, "b (n c u) -> (b n) (c u)", c=chunk_size, u=num_updates
+        #)
 
         # optionally a storing memories mask can be passed in. if False, will set the learning rate to 0. for those positions
 
@@ -719,12 +719,13 @@ class NeuralMemory(Module):
 
         # flatten batch and time if surprise depends on previous layer memory model
 
-        weights_for_surprise = rearrange_dict_values(
-            weights_for_surprise, "b n ... -> (b n) ..."
-        )
+        #weights_for_surprise = rearrange_dict_values(
+        #    weights_for_surprise, "b n ... -> (b n) ..."
+        #)
 
         # get grads and extra auxiliary loss (for backwarding through qkv projection in base neural memory module)
 
+        weights_for_surprise = weights
         grads, unweighted_mem_model_loss = self.per_sample_grad_fn(
             dict(weights_for_surprise), keys, adaptive_lr, values
         )

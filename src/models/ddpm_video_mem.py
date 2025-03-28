@@ -1,13 +1,13 @@
 from typing import Any, Dict, Optional, Union, Sequence, Tuple, Callable, Literal
 from functools import partial
 import math
+import time
 
 import numpy as np
 import torch
 from torch import Tensor
 import torch.nn as nn
 import torch.nn.functional as F
-from lightning import LightningModule
 from torchmetrics import MeanMetric
 import wandb
 from tqdm import tqdm
@@ -15,12 +15,19 @@ from lightning.pytorch.utilities.types import STEP_OUTPUT
 from torch.optim.optimizer import Optimizer
 from lightning.pytorch.utilities.rank_zero import rank_zero_only
 from lightning.pytorch.utilities import grad_norm
+import gc
+
+
+import torch.distributed as dist
+
 
 from einops import rearrange, repeat, reduce
 
 # Import the DDPM scheduler from diffusers
 # from src.models.components.moe_lora import inject_lora, disable_all_adapters, enable_all_adapters, set_lora_trainability, reset_all_lora_parameters, get_lora_adapter_parameters, get_lora_adapter_parameters, set_global_trainability , get_global_parameters
 from diffusers import DDPMScheduler
+from transformers import get_scheduler
+
 from src.models.metrics.video import VideoMetric, SharedVideoMetricModelRegistry
 from src.models.common import BaseLightningTrainer
 from src.models.components.diffusion import DiscreteDiffusion, ContinuousDiffusion
@@ -95,9 +102,11 @@ class DiffusionModelTrainer(BaseLightningTrainer):
 
         self.temporal_downsampling_factor = latent_downsampling_factor[0]
         self.is_latent_video_vae = self.temporal_downsampling_factor > 1
+
+        self.x_shape = self.hparams.x_shape
         if self.hparams.is_latent_diffusion:
-            self.hparams.x_shape = [self.haparams.latent_num_channels] + [
-                d // latent_downsampling_factor[1] for d in self.hparams.x_shape[1:]
+            self.x_shape = [self.hparams.latent_num_channels] + [
+                d // latent_downsampling_factor[1] for d in self.x_shape[1:]
             ]
             # if self.is_latent_video_vae:
             #    self.check_video_vae_compatibility(cfg)
@@ -106,6 +115,8 @@ class DiffusionModelTrainer(BaseLightningTrainer):
         )
 
         self.tasks = [task for task in self.hparams.tasks]
+        self.generator = None
+
 
         self.num_logged_videos = 0
 
@@ -164,7 +175,7 @@ class DiffusionModelTrainer(BaseLightningTrainer):
                 "optimizer": optimizer,
                 "lr_scheduler": {
                     "scheduler": lr_scheduler,
-                    "interval": "epoch",
+                    "interval": "step",
                     "frequency": 1,
                 },
             }
@@ -172,7 +183,7 @@ class DiffusionModelTrainer(BaseLightningTrainer):
 
     def setup(self, stage: str) -> None:
         self.diffusion_model = self.diffusion_model(
-            x_shape=self.hparams.x_shape,
+            x_shape=self.x_shape,
             max_tokens=self.max_tokens,
             external_cond_dim=self.external_cond_dim,
         )
@@ -342,7 +353,7 @@ class DiffusionModelTrainer(BaseLightningTrainer):
         # 1. Tokenize the videos and optionally prepare the ground truth videos
         gt_videos = None
         if self.hparams.is_latent_diffusion:
-            xs = self._encode(batch["videos"]) if self.is_latent_online else batch["latents"]
+            xs = self._encode(batch["videos"]) if self.hparams.is_latent_online else batch["latents"]
             if "videos" in batch:
                 gt_videos = batch["videos"]
         else:
@@ -389,7 +400,6 @@ class DiffusionModelTrainer(BaseLightningTrainer):
 
     def _log_videos(self, all_videos: Dict[str, Tensor], namespace: str) -> None:
         """Log videos during validation/test step."""
-        print(f"Rank: {self.global_rank}")
         all_videos = self.gather_data(all_videos)
 
         batch_size, n_frames = all_videos["gt"].shape[:2]
@@ -401,14 +411,13 @@ class DiffusionModelTrainer(BaseLightningTrainer):
             and self.num_logged_videos < self.hparams.log_max_num_videos
         ):
             return
-        print(f"Rank after: {self.global_rank}")
 
         num_videos_to_log = min(
             self.hparams.log_max_num_videos - self.num_logged_videos,
             batch_size,
         )
         cut_videos = lambda x: x[:num_videos_to_log]
-        # raw_dir = self.trainer.log_dir
+        #raw_dir = self.trainer.log_dir
 
         for task in self.tasks:
             log_video(
@@ -615,7 +624,7 @@ class DiffusionModelTrainer(BaseLightningTrainer):
             self.hparams.log_grad_norm_freq
             and self.global_step % self.hparams.log_grad_norm_freq == 0
         ):
-            norms = grad_norm(self.model, norm_type=2)
+            norms = grad_norm(self.diffusion_model, norm_type=2)
             # NOTE: `norms` need not be gathered, as they are already uniform across all devices
             self.log_dict(norms)
 
@@ -628,6 +637,7 @@ class DiffusionModelTrainer(BaseLightningTrainer):
         """Validation step"""
         # 1. If running validation while training a model, directly evaluate
         # the denoising performance to detect overfitting, etc.
+
         # Logs the "denoising_vis" visualization as well as "validation/loss" metric.
         if self.trainer.state.fn == "fit":
             self._eval_denoising(batch, batch_idx, namespace=namespace)
@@ -656,14 +666,39 @@ class DiffusionModelTrainer(BaseLightningTrainer):
         if self.trainer.sanity_checking and not self.hparams.log_sanity_generation:
             return
 
-        for task in self.tasks:
-            self.log_dict(
-                self._metrics(task).log(task),
-                on_step=False,
-                on_epoch=True,
-                prog_bar=True,
-                sync_dist=True,
-            )
+        start = time.time()
+        metrics = self._metrics("prediction").log("prediction")
+
+        #dist.barrier()
+        #if self.global_rank == 0:
+        #    self.logger.log_metrics(metrics)
+        #dist.barrier()
+
+        #print(f"[Rank {self.global_rank}] Metrics logged in {time.time() - start:.3f}s")
+
+        #torch.cuda.synchronize()
+        #print(f"[Rank {self.global_rank}] Before barrier:", time.time() - start)
+
+        #dist.barrier()
+        #torch.cuda.synchronize()
+        #print(f"[Rank {self.global_rank}] After barrier:", time.time() - start)
+
+        self.log_dict(metrics, sync_dist=True)
+        #torch.cuda.synchronize()
+        #print(f"[Rank {self.global_rank}] After log_dict:", time.time() - start)
+
+        #for task in self.tasks:
+        #    self.log_dict(
+        #        self._metrics(task).log(task),
+        #        on_step=False,
+        #        on_epoch=True,
+        #        prog_bar=True,
+        #        sync_dist=True,
+        #    )
+
+    def on_train_epoch_start(self):
+        print(f"[{self.global_rank}] Started training epoch start")
+
 
     def test_step(self, *args: Any, **kwargs: Any) -> STEP_OUTPUT:
         return self.validation_step(*args, **kwargs, namespace="test")
@@ -988,7 +1023,7 @@ class DiffusionModelTrainer(BaseLightningTrainer):
 
         curr_token = gt_len
         xs_pred = context
-        x_shape = self.hparams.x_shape
+        x_shape = self.x_shape
         record = None
         pbar = tqdm(
             total=self.hparams.sampling_timesteps
@@ -1190,7 +1225,7 @@ class DiffusionModelTrainer(BaseLightningTrainer):
         # -------------------------------------------------------------------------
         # Step 1: Prepare counters and output storage
         # -------------------------------------------------------------------------
-        x_shape = self.hparams.x_shape
+        x_shape = self.x_shape
         device = self.device
         xs_pred = None  # Will hold the evolving predictions
         record = [] if return_all else None
@@ -1826,7 +1861,7 @@ class DiffusionModelTrainer(BaseLightningTrainer):
                     raise ValueError("Context length is larger than the total number of tokens.")
 
             # Prepare next chunk (context chunk + blank frames)
-            pad = torch.zeros((batch_size, h, *self.hparams.x_shape), device=self.device)
+            pad = torch.zeros((batch_size, h, *self.x_shape), device=self.device)
 
             context_mask = torch.cat(
                 [
@@ -1891,7 +1926,7 @@ class DiffusionModelTrainer(BaseLightningTrainer):
         guidance_fn: Optional[Callable] = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
 
-        x_shape = self.hparams.x_shape
+        x_shape = self.x_shape
         padding = self.max_tokens - length
 
         scheduling_matrix = self._generate_scheduling_matrix(
@@ -2039,7 +2074,7 @@ class DiffusionModelTrainer(BaseLightningTrainer):
         pbar: Optional[tqdm] = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
 
-        x_shape = self.hparams.x_shape
+        x_shape = self.x_shape
         number_of_tokens = self.max_tokens * number_of_chunks
         padding = number_of_tokens - length
         # pad context and context_mask
@@ -2223,7 +2258,7 @@ class DiffusionModelTrainer(BaseLightningTrainer):
         return rearrange(
             x,
             "... -> ... "
-            + "1 " * len(self.hparams.x_shape),  # e.g. " -> ... 1 1 1" if x_shape=[3,64,64]
+            + "1 " * len(self.x_shape),  # e.g. " -> ... 1 1 1" if x_shape=[3,64,64]
         )
 
     # ---------------------------------------------------------------------
@@ -2274,7 +2309,7 @@ class DiffusionModelTrainer(BaseLightningTrainer):
         """
         x = rearrange(x, f"{shape} -> b c t h w")
         batch_size = x.shape[0]
-        vae_batch_size = self.cfg.vae.batch_size
+        vae_batch_size = self.hparams.vae_batch_size
         # chunk the input tensor by vae_batch_size
         chunks = torch.chunk(x, (batch_size + vae_batch_size - 1) // vae_batch_size, 0)
         outputs = []
@@ -2357,7 +2392,7 @@ class DiffusionModelTrainer(BaseLightningTrainer):
         # 2. (Optionally) swap the state_dict of the model with the EMA weights for inference
         super().on_load_checkpoint(checkpoint)
         # 3. (Optionally) reset the optimizer states - for fresh finetuning or resuming training
-        if self.cfg.checkpoint.reset_optimizer:
+        if self.hparams.reset_optimizer:
             checkpoint["optimizer_states"] = []
 
         # 4. Rewrite the state_dict of the checkpoint, only leaving meaningful keys
@@ -2393,7 +2428,7 @@ class DiffusionModelTrainer(BaseLightningTrainer):
                 cyan("The following keys are not found in the checkpoint:"),
                 missing_keys,
             )
-            if self.cfg.checkpoint.strict:
+            if self.hparams.strict_load:
                 raise ValueError(
                     "Thus, the checkpoint cannot be loaded. To ignore this error, turn off strict checkpoint loading by setting `algorithm.checkpoint.strict=False`."
                 )

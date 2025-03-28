@@ -1,6 +1,6 @@
 from typing import Dict, List
 from torch import nn, Tensor
-from torchmetrics.image.lpip import NoTrainLpips
+from torchmetrics.image.lpip import _NoTrainLpips
 from torchmetrics.image.fid import NoTrainInceptionV3
 from utils.torch_utils import freeze_model
 from utils.print_utils import suppress_warnings
@@ -58,7 +58,7 @@ class SharedVideoMetricModelRegistry(nn.ModuleDict):
         match model_type:
             case VideoMetricModelType.LPIPS:
                 with suppress_warnings():
-                    self[model_type] = NoTrainLpips(net="vgg", verbose=False)
+                    self[model_type] = _NoTrainLpips(net="vgg", verbose=False)
             case VideoMetricModelType.INCEPTION_V3:
                 self[model_type] = NoTrainInceptionV3(
                     name="inception-v3-compat", features_list=["2048"]
